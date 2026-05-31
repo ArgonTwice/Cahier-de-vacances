@@ -1,0 +1,3142 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="theme-color" content="#1a1a2e"/>
+  <title>🌴 Cahier de Vacances</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+    body{background:#1a1a2e;font-family:'Nunito','Segoe UI',sans-serif;overflow-x:hidden}
+    button,input{touch-action:manipulation}
+    ::-webkit-scrollbar{display:none}
+    #root{min-height:100vh}
+    #splash{position:fixed;inset:0;background:#1a1a2e;display:flex;align-items:center;justify-content:center;z-index:9999;flex-direction:column;gap:12px;transition:opacity 0.4s}
+    #splash.hide{opacity:0;pointer-events:none}
+    .palm{font-size:64px;animation:sf 1.5s ease-in-out infinite;display:inline-block}
+    #msg{color:#fff;font-size:18px;font-family:'Nunito',sans-serif;font-weight:800;margin-top:4px}
+    #sub{color:rgba(255,255,255,0.45);font-size:13px;font-family:'Nunito',sans-serif;text-align:center;padding:0 20px;max-width:280px}
+    #bar-wrap{width:220px;height:5px;background:rgba(255,255,255,0.1);border-radius:99;overflow:hidden;margin-top:10px}
+    #bar{height:100%;width:0%;background:linear-gradient(90deg,#4ECDC4,#FFD700);border-radius:99;transition:width 0.4s ease}
+    @keyframes sf{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+  </style>
+</head>
+<body>
+
+<div id="splash">
+  <span class="palm">🌴</span>
+  <div id="msg">Cahier de Vacances</div>
+  <div id="sub">Démarrage...</div>
+  <div id="bar-wrap"><div id="bar"></div></div>
+</div>
+<div id="root"></div>
+
+<!-- React 18 production -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+<script>
+
+// ── Firebase config ───────────────────────────────────────────────────────────
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAh8Oz6y95WQGns8qpwb11IqV4DfeX_CnM",
+  authDomain: "cahier-de-vacances-44ba8.firebaseapp.com",
+  databaseURL: "https://cahier-de-vacances-44ba8-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "cahier-de-vacances-44ba8",
+  storageBucket: "cahier-de-vacances-44ba8.firebasestorage.app",
+  messagingSenderId: "718415231193",
+  appId: "1:718415231193:web:3b16be7944da0a82d7a6c8"
+};
+
+// ── Firebase Realtime Database helpers ───────────────────────────────────────
+let _db = null;
+function getDB() { return _db; }
+
+function firebasePath(key) {
+  // Nettoyer la clé pour Firebase (pas de . # $ [ ])
+  return key.replace(/[.#$\[\]]/g, '_');
+}
+
+async function fbSet(path, value) {
+  try {
+    const url = FIREBASE_CONFIG.databaseURL + '/' + path + '.json?auth=' + FIREBASE_CONFIG.apiKey;
+    await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(value)
+    });
+  } catch(e) { console.warn('fbSet error:', e); }
+}
+
+async function fbGet(path) {
+  try {
+    const url = FIREBASE_CONFIG.databaseURL + '/' + path + '.json';
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const data = await r.json();
+    return data;
+  } catch(e) { return null; }
+}
+
+async function fbGetAll(path) {
+  try {
+    const url = FIREBASE_CONFIG.databaseURL + '/' + path + '.json';
+    const r = await fetch(url);
+    if (!r.ok) return {};
+    const data = await r.json();
+    return data || {};
+  } catch(e) { return {}; }
+}
+
+async function fbDelete(path) {
+  try {
+    const url = FIREBASE_CONFIG.databaseURL + '/' + path + '.json?auth=' + FIREBASE_CONFIG.apiKey;
+    await fetch(url, { method: 'DELETE' });
+  } catch(e) {}
+}
+
+// ── window.storage — API compatible artifact, backed by Firebase ──────────────
+// shared=true  → Firebase (visible des 2 tablettes)
+// shared=false → localStorage (profil local)
+window.storage = {
+  _local: {},
+
+  async get(key, shared) {
+    if (!shared) {
+      // Local : localStorage
+      try {
+        const v = localStorage.getItem('pr_' + key);
+        if (v === null) throw new Error('nf');
+        return { key, value: v, shared: false };
+      } catch(e) { throw e; }
+    }
+    // Shared : Firebase
+    const clean = firebasePath(key);
+    const val = await fbGet('shared/' + clean);
+    if (val === null) throw new Error('not found');
+    return { key, value: typeof val === 'string' ? val : JSON.stringify(val), shared: true };
+  },
+
+  async set(key, value, shared) {
+    const sv = typeof value === 'string' ? value : JSON.stringify(value);
+    if (!shared) {
+      try { localStorage.setItem('pr_' + key, sv); } catch(e) {}
+      return { key, value: sv, shared: false };
+    }
+    // Shared : Firebase
+    const clean = firebasePath(key);
+    await fbSet('shared/' + clean, sv);
+    return { key, value: sv, shared: true };
+  },
+
+  async delete(key, shared) {
+    if (!shared) {
+      localStorage.removeItem('pr_' + key);
+      return { key, deleted: true, shared: false };
+    }
+    await fbDelete('shared/' + firebasePath(key));
+    return { key, deleted: true, shared: true };
+  },
+
+  async list(prefix, shared) {
+    if (!shared) {
+      const keys = [];
+      const p = 'pr_' + (prefix || '');
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(p)) keys.push(k.replace('pr_', ''));
+      }
+      return { keys, prefix, shared: false };
+    }
+    // Shared : lister les clés Firebase sous shared/
+    const all = await fbGetAll('shared');
+    const cleanPrefix = firebasePath(prefix || '');
+    const keys = Object.keys(all)
+      .filter(k => k.startsWith(cleanPrefix))
+      .map(k => k.replace(/_/g, match => {
+        // Reverse : on garde tel quel car les clés sont déjà nettoyées
+        return match;
+      }));
+    return { keys, prefix, shared: true };
+  }
+};
+
+// ── React hooks ───────────────────────────────────────────────────────────────
+const {useState, useEffect, useCallback, useRef} = React;
+
+// ── Cache & mount ─────────────────────────────────────────────────────────────
+const CACHE_KEY = 'cvac_5ee67e48';
+
+function setBar(p) { const b=document.getElementById('bar'); if(b) b.style.width=p+'%'; }
+function setSub(t) { const s=document.getElementById('sub'); if(s) s.textContent=t; }
+function hideSplash() {
+  const s=document.getElementById('splash');
+  if(s) { s.classList.add('hide'); setTimeout(()=>s.remove(), 500); }
+}
+
+function mountFromCode(code) {
+  try {
+    eval(code);
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(App));
+    setTimeout(hideSplash, 200);
+  } catch(e) {
+    setSub('Erreur: ' + e.message.slice(0,80));
+    console.error('Mount error:', e);
+  }
+}
+
+function compileAndMount() {
+  // Vérifier cache localStorage
+  try {
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (cached) {
+      setSub('Chargement rapide \u26a1'); setBar(95);
+      setTimeout(() => { setBar(100); mountFromCode(cached); }, 50);
+      return;
+    }
+  } catch(e) {}
+
+  setSub('Première ouverture : compilation...'); setBar(35);
+  const jsx = document.getElementById('jsx-src').textContent;
+
+  setTimeout(() => {
+    setBar(55);
+    setTimeout(() => {
+      try {
+        const result = Babel.transform(jsx, {
+          presets: [['react', {runtime:'classic'}]],
+          sourceMaps: false,
+          comments: false,
+          compact: true,
+        });
+        setBar(85); setSub('Démarrage...');
+        try { localStorage.setItem(CACHE_KEY, result.code); } catch(e) {}
+        setTimeout(() => { setBar(100); mountFromCode(result.code); }, 80);
+      } catch(e) {
+        setSub('Erreur compilation: ' + e.message.slice(0,60));
+        console.error('Babel error:', e);
+      }
+    }, 100);
+  }, 50);
+}
+
+function loadBabel(urls, idx) {
+  if (idx >= urls.length) {
+    setSub('Erreur réseau. Vérifiez votre connexion et rechargez.');
+    return;
+  }
+  setSub('Chargement (' + (idx+1) + '/3)...'); setBar(15);
+  const s = document.createElement('script');
+  s.src = urls[idx];
+  s.onload = () => compileAndMount();
+  s.onerror = () => { setSub('CDN ' + (idx+1) + ' indispo, essai suivant...'); loadBabel(urls, idx+1); };
+  document.head.appendChild(s);
+}
+
+window.addEventListener('load', () => {
+  // Cache dispo → pas besoin de Babel
+  try {
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (cached) {
+      setSub('Chargement rapide \u26a1'); setBar(90);
+      setTimeout(() => { setBar(100); mountFromCode(cached); }, 100);
+      return;
+    }
+  } catch(e) {}
+
+  loadBabel([
+    'https://unpkg.com/@babel/standalone@7.23.10/babel.min.js',
+    'https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.10/babel.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.10/babel.min.js',
+  ], 0);
+});
+
+</script>
+
+<!-- Code JSX de l'app (compilé au premier chargement, mis en cache ensuite) -->
+<script type="text/plain" id="jsx-src">
+
+// ─── CONSTANTES ─────────────────────────────────────────────────────────────────
+const LEVELS = [
+  { id:"cm1-cm2", label:"CM1 → CM2", from:"CM1", to:"CM2" },
+  { id:"cm2-6e",  label:"CM2 → 6ème", from:"CM2", to:"6ème" },
+  { id:"6e-5e",   label:"6ème → 5ème", from:"6ème", to:"5ème" },
+];
+const SUBJECTS = [
+  { id:"maths",    label:"Maths",        emoji:"🔢", color:"#4ECDC4",
+    mascot:"🤖", mascotName:"Robo",
+    scenarios:[
+      { bg:"linear-gradient(135deg,#0f172a,#1e3a5f,#0f172a)", scene:"🚀 Mission spatiale", intro:"Houston, on a un problème de calcul ! M'aide !" },
+      { bg:"linear-gradient(135deg,#1a0533,#3b0764,#1a0533)", scene:"🏰 Château enchanté",  intro:"Le sorcier a bloqué la porte avec une énigme mathématique !" },
+      { bg:"linear-gradient(135deg,#052e16,#14532d,#052e16)", scene:"🌋 Île mystérieuse",   intro:"Pour trouver le trésor, il faut résoudre ce calcul !" },
+    ]
+  },
+  { id:"francais", label:"Français", emoji:"📖", color:"#FF6B9D",
+    mascot:"🦊", mascotName:"Félix",
+    scenarios:[
+      { bg:"linear-gradient(135deg,#450a0a,#7f1d1d,#450a0a)", scene:"📜 Parchemin ancien",   intro:"Ce vieux texte a des fautes partout ! Peux-tu les corriger ?" },
+      { bg:"linear-gradient(135deg,#2d1b69,#4c1d95,#2d1b69)", scene:"🎭 Théâtre magique",    intro:"Le rideau se lève ! Quelle est la bonne réponse pour le spectacle ?" },
+      { bg:"linear-gradient(135deg,#0c4a6e,#075985,#0c4a6e)", scene:"🏖️ Bouteille à la mer", intro:"Un message mystérieux arrive ! Aide-moi à le comprendre !" },
+    ]
+  },
+  { id:"anglais",  label:"Anglais",  emoji:"🌍", color:"#A855F7",
+    mascot:"🐦", mascotName:"Pip",
+    scenarios:[
+      { bg:"linear-gradient(135deg,#1c1917,#44403c,#1c1917)", scene:"🗽 New York City",      intro:"A tourist is lost! Can you help with the right answer?" },
+      { bg:"linear-gradient(135deg,#0f172a,#1e3a5f,#0f172a)", scene:"🏴‍☠️ Pirate ship",       intro:"The treasure map is in English! Decode it!" },
+      { bg:"linear-gradient(135deg,#14532d,#166534,#14532d)", scene:"🌿 Jungle adventure",   intro:"The jungle guide only speaks English. What does he say?" },
+    ]
+  },
+  { id:"histoire", label:"Histoire/Géo", emoji:"🗺️", color:"#F59E0B",
+    mascot:"🧙", mascotName:"Merlin",
+    scenarios:[
+      { bg:"linear-gradient(135deg,#292524,#57534e,#292524)", scene:"🏛️ Rome antique",      intro:"Nous sommes en l'an 50 avant J.-C. Jules César me pose une question !" },
+      { bg:"linear-gradient(135deg,#1c0d00,#431407,#1c0d00)", scene:"⚔️ Moyen Âge",        intro:"Le chevalier garde le pont ! Réponds correctement pour passer !" },
+      { bg:"linear-gradient(135deg,#0f172a,#1e3a8a,#0f172a)", scene:"🌊 Âge des explorateurs", intro:"Christophe Colomb veut naviguer mais il a besoin de ton aide !" },
+    ]
+  },
+  { id:"sciences", label:"Sciences", emoji:"🔬", color:"#10B981",
+    mascot:"🧪", mascotName:"Sparky",
+    scenarios:[
+      { bg:"linear-gradient(135deg,#022c22,#064e3b,#022c22)", scene:"🌿 Forêt tropicale",    intro:"Une plante inconnue ! Sparky a besoin de toi pour l'analyser !" },
+      { bg:"linear-gradient(135deg,#0f172a,#1e3a5f,#083344)", scene:"🌌 Cosmos",             intro:"Destination étoiles ! Une découverte extraordinaire nous attend !" },
+      { bg:"linear-gradient(135deg,#1a1a00,#3d3d00,#1a1a00)", scene:"⚗️ Laboratoire secret", intro:"L'expérience commence ! Attention, une seule bonne réponse !" },
+    ]
+  },
+];
+const THEMES = {
+  foot:{ name:"Football Manager", emoji:"⚽", bg:"linear-gradient(135deg,#0f4c2a,#1a7a45,#0d3d22)", accent:"#4ade80", border:"#22c55e" },
+  city:{ name:"Ma Ville",         emoji:"🏙️", bg:"linear-gradient(135deg,#1e1b4b,#4c1d95,#1e1b4b)", accent:"#f472b6", border:"#c084fc" },
+};
+const FOOT_SHOP=[
+  {id:"seat_basic",    name:"Tribunes",        cost:50,  emoji:"🪑",desc:"Capacity +200",   type:"stade"},
+  {id:"seat_vip",      name:"Loges VIP",       cost:150, emoji:"💎",desc:"Prestige +10",    type:"stade"},
+  {id:"scoreboard",    name:"Grand Écran",     cost:100, emoji:"📺",desc:"Ambiance +15",    type:"stade"},
+  {id:"floodlights",   name:"Éclairage Nuit",  cost:80,  emoji:"💡",desc:"Matchs nocturnes",type:"stade"},
+  {id:"pitch_premium", name:"Pelouse Premium", cost:120, emoji:"🌿",desc:"Performance +5",  type:"stade"},
+  {id:"player_gk",     name:"Gardien Elite",   cost:200, emoji:"🥅",desc:"Défense +20",     type:"joueur"},
+  {id:"player_df",     name:"Défenseur Rock",  cost:180, emoji:"🛡️",desc:"Solidité +15",    type:"joueur"},
+  {id:"player_md",     name:"Milieu Créatif",  cost:220, emoji:"🎯",desc:"Contrôle +18",    type:"joueur"},
+  {id:"player_at",     name:"Attaquant",       cost:250, emoji:"⚡",desc:"Buts +25",        type:"joueur"},
+  {id:"kit_home",      name:"Maillot Domicile",cost:60,  emoji:"👕",desc:"Moral +5",        type:"equip"},
+  {id:"kit_away",      name:"Maillot Extérieur",cost:60, emoji:"🎽",desc:"Moral +5",        type:"equip"},
+  {id:"trophy_cup",    name:"Trophée de Coupe",cost:500, emoji:"🏆",desc:"Légende!",        type:"trophee"},
+];
+const CITY_SHOP=[
+  {id:"park",        name:"Parc Fleuri",       cost:50,  emoji:"🌳",desc:"Bonheur +10",    type:"nature"},
+  {id:"fountain",    name:"Fontaine",          cost:80,  emoji:"⛲",desc:"Beauté +15",     type:"nature"},
+  {id:"school",      name:"École",             cost:120, emoji:"🏫",desc:"Population +50", type:"batiment"},
+  {id:"hospital",    name:"Hôpital",           cost:150, emoji:"🏥",desc:"Santé +20",      type:"batiment"},
+  {id:"library",     name:"Bibliothèque",      cost:100, emoji:"📚",desc:"Culture +15",    type:"batiment"},
+  {id:"bakery",      name:"Boulangerie",       cost:70,  emoji:"🥐",desc:"Bonheur +8",     type:"commerce"},
+  {id:"cinema",      name:"Cinéma",            cost:130, emoji:"🎬",desc:"Loisirs +20",    type:"commerce"},
+  {id:"castle",      name:"Château",           cost:300, emoji:"🏰",desc:"Magie +30",      type:"special"},
+  {id:"lighthouse",  name:"Phare",             cost:200, emoji:"🗼",desc:"Mystère +25",    type:"special"},
+  {id:"char_kid",    name:"Enfants Joyeux",    cost:60,  emoji:"👧🏽",desc:"+5 habitants", type:"habitant"},
+  {id:"char_artist", name:"Artiste de Rue",    cost:90,  emoji:"🎨",desc:"Culture +12",    type:"habitant"},
+  {id:"rainbow",     name:"Arc-en-ciel",       cost:500, emoji:"🌈",desc:"Légende!",       type:"special"},
+];
+const STREAK_BADGES=[
+  {streak:3, emoji:"🔥",label:"Série de 3 !"},
+  {streak:5, emoji:"⚡",label:"Série de 5 !"},
+  {streak:10,emoji:"💥",label:"Série de 10 !"},
+  {streak:20,emoji:"🌟",label:"Légendaire x20 !"},
+];
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────────
+const STORAGE_KEY="vacances_v6";
+function getWeekId(){const n=new Date(),s=new Date(n.getFullYear(),0,1);return`${n.getFullYear()}-W${Math.ceil(((n-s)/86400000+s.getDay()+1)/7)}`;}
+function isWeekend(){const d=new Date().getDay();return d===0||d===6;}
+function loadProfile(){try{const r=localStorage.getItem(STORAGE_KEY);return r?JSON.parse(r):null;}catch{return null;}}
+function saveProfile(p){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(p));}catch{}}
+function createProfile(pseudo,theme,level){
+  return{pseudo,theme,level,stars:0,totalStars:0,owned:[],
+    stats:{sessions:0,correct:0,total:0},
+    weakTopics:{},weeklyStars:{},streak:0,maxStreak:0,earnedBadges:[],
+    storyClaimed:[],lastVisit:0,reminderEnabled:false,reminderHour:10,createdAt:Date.now()};
+}
+async function sharedSet(k,v){try{await window.storage.set(k,JSON.stringify(v),true);}catch{}}
+async function sharedList(p){try{const r=await window.storage.list(p,true);return r?.keys||[];}catch{return[];}}
+
+// ─── API ──────────────────────────────────────────────────────────────────────────
+async function generateQuestion(subject,level,prevTopics=[],forceTopic=null,examMode=false){
+  const lv=LEVELS.find(l=>l.id===level);
+  const sub=SUBJECTS.find(s=>s.id===subject)||SUBJECTS[0];
+  const forceStr=forceTopic?`\nFORCE thème: "${forceTopic}".`:"";
+  const avoidStr=prevTopics.length>0?`\nÉvite ces thèmes récents: ${prevTopics.slice(-6).join(", ")}`:"";
+  const examStr=examMode?"\nMode examen: favorise des questions exigeantes, varie les difficultés.":"";
+
+  const system=`Tu génères des questions éducatives LUDIQUES et IMMERSIVES pour enfants niveau ${lv.from}→${lv.to}.
+Le personnage narrateur s'appelle "${sub.mascotName}" (${sub.mascot}).
+La mise en scène actuelle est: "${sub.scenarios[0].scene}".
+
+RÉPONDS UNIQUEMENT en JSON valide, sans markdown ni backticks.
+QCM: {"question":"...","type":"qcm","choices":["A) ...","B) ...","C) ...","D) ..."],"answer":"A","explanation":"...","topic":"...","context":"...","hint":"..."}
+Ouvert: {"question":"...","type":"open","answer":"...","explanation":"...","topic":"...","context":"...","hint":"..."}
+
+Règles IMPORTANTES:
+- question: formulée comme une MISSION ou une SITUATION (ex: "L'explorateur trouve 3 coffres avec 24 pièces chacun. Combien en tout ?")
+- context: courte phrase d'ambiance narrative (1-2 mots max, style BD), ex: "⚠️ Alarme !", "🌀 Mystère...", "💣 Urgent !"
+- hint: indice rigolo en 1 phrase si bloqué (ex: "Psst... pense aux tables de 3 !")
+- explanation: fun, comme si le personnage parlait à l'enfant
+- answer: lettre seule pour qcm, réponse courte pour open
+- topic: 2-3 mots${avoidStr}${forceStr}${examStr}`;
+
+  const prompts={
+    maths:`Question maths ${lv.from}→${lv.to} avec mise en situation aventure/mission. Calcul, fractions, géométrie, mesures, problèmes, tables.`,
+    francais:`Question français ${lv.from}→${lv.to} avec mise en situation narrative. Conjugaison, grammaire, orthographe, vocabulaire, accords.`,
+    anglais:`Question anglais pour francophones ${lv.from}→${lv.to} avec situation de voyage/aventure. Question en français, réponse en anglais.`,
+    histoire:`Question histoire/géo ${lv.from}→${lv.to} avec mise en situation historique immersive. Civilisations, dates, géographie.`,
+    sciences:`Question sciences ${lv.from}→${lv.to} avec mise en situation expérience/exploration. Corps humain, animaux, végétaux, espace.`,
+    mix:`Question aléatoire parmi toutes matières niveau ${lv.from}→${lv.to}, avec mise en situation narrative.`,
+  };
+
+  const res=await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:500,system,
+      messages:[{role:"user",content:prompts[subject]||prompts.mix}]}),
+  });
+  const data=await res.json();
+  const text=(data.content||[]).map(b=>b.text||"").join("").replace(/```json|```/g,"").trim();
+  return JSON.parse(text);
+}
+
+// ─── COMPOSANTS UTILITAIRES ───────────────────────────────────────────────────────
+function ProgressBar({value,max,color,height=8}){
+  return <div style={{height,background:"rgba(255,255,255,0.15)",borderRadius:99,overflow:"hidden"}}>
+    <div style={{height:"100%",width:`${Math.min(100,(value/max)*100)}%`,background:color,borderRadius:99,transition:"width 0.5s ease"}}/>
+  </div>;
+}
+function Toast({msg,accent}){
+  return <div style={{position:"fixed",bottom:30,left:"50%",transform:"translateX(-50%)",background:"rgba(10,10,20,0.95)",backdropFilter:"blur(12px)",color:"#fff",padding:"12px 24px",borderRadius:99,fontWeight:700,fontSize:15,zIndex:9999,border:`1px solid ${accent}88`,whiteSpace:"nowrap",animation:"fadeUp 0.25s ease"}}>
+    {msg}<style>{`@keyframes fadeUp{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}`}</style>
+  </div>;
+}
+
+// ─── PARTICULES ───────────────────────────────────────────────────────────────────
+function Particles({type}){ // type: "win"|"lose"
+  const particles=Array.from({length:type==="win"?20:8}).map((_,i)=>({
+    id:i,
+    x:Math.random()*100,
+    delay:Math.random()*0.5,
+    dur:0.6+Math.random()*0.6,
+    emoji:type==="win"?["⭐","✨","🎉","💫","🌟"][i%5]:["💔","😅","🌀"][i%3],
+    size:type==="win"?16+Math.random()*14:18,
+  }));
+  return <div style={{position:"fixed",inset:0,pointerEvents:"none",zIndex:8000,overflow:"hidden"}}>
+    {particles.map(p=>(
+      <div key={p.id} style={{position:"absolute",left:`${p.x}%`,top:"60%",fontSize:p.size,
+        animation:`particle${type} ${p.dur}s ease-out ${p.delay}s both`}}>
+        {p.emoji}
+      </div>
+    ))}
+    <style>{`
+      @keyframes particlewin{0%{transform:translateY(0) scale(0.5) rotate(0deg);opacity:1}100%{transform:translateY(-220px) scale(1.2) rotate(${Math.random()>0.5?'':'- '}360deg);opacity:0}}
+      @keyframes particlelose{0%{transform:translateY(0) scale(1);opacity:1}100%{transform:translateY(80px) scale(0.5);opacity:0}}
+    `}</style>
+  </div>;
+}
+
+// ─── MASCOT ANIMATOR ─────────────────────────────────────────────────────────────
+function Mascot({emoji,state,size=56}){
+  // state: idle|talk|correct|wrong|thinking
+  const anims={
+    idle:"mascotIdle 2s ease-in-out infinite",
+    talk:"mascotTalk 0.4s ease-in-out infinite alternate",
+    correct:"mascotCorrect 0.6s cubic-bezier(0.34,1.56,0.64,1)",
+    wrong:"mascotWrong 0.5s ease-in-out",
+    thinking:"mascotThink 1.5s ease-in-out infinite",
+  };
+  return <div style={{fontSize:size,display:"inline-block",animation:anims[state]||anims.idle,filter:state==="correct"?"drop-shadow(0 0 12px #4ade80)":state==="wrong"?"drop-shadow(0 0 12px #f87171)":"drop-shadow(0 4px 8px rgba(0,0,0,0.5))"}}>
+    {emoji}
+    <style>{`
+      @keyframes mascotIdle{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-6px) rotate(2deg)}}
+      @keyframes mascotTalk{from{transform:scale(1) rotate(-3deg)}to{transform:scale(1.08) rotate(3deg)}}
+      @keyframes mascotCorrect{0%{transform:scale(1)}30%{transform:scale(1.4) rotate(15deg)}60%{transform:scale(0.9) rotate(-10deg)}100%{transform:scale(1) rotate(0)}}
+      @keyframes mascotWrong{0%{transform:translateX(0)}20%{transform:translateX(-10px) rotate(-10deg)}40%{transform:translateX(10px) rotate(10deg)}60%{transform:translateX(-6px)}80%{transform:translateX(6px)}100%{transform:translateX(0) rotate(0)}}
+      @keyframes mascotThink{0%,100%{transform:rotate(-5deg) translateY(0)}50%{transform:rotate(5deg) translateY(-4px)}}
+    `}</style>
+  </div>;
+}
+
+// ─── SPEECH BUBBLE ───────────────────────────────────────────────────────────────
+function SpeechBubble({text,color,side="left",animate=true}){
+  return <div style={{position:"relative",background:"rgba(255,255,255,0.95)",borderRadius:18,padding:"10px 14px",maxWidth:"75%",boxShadow:`0 4px 20px rgba(0,0,0,0.3)`,animation:animate?"bubbleIn 0.3s cubic-bezier(0.34,1.56,0.64,1) both":"none"}}>
+    <p style={{margin:0,color:"#1a1a2e",fontSize:13,fontWeight:700,lineHeight:1.4}}>{text}</p>
+    <div style={{position:"absolute",bottom:-10,[side==="left"?"left":"right"]:20,width:0,height:0,borderLeft:"8px solid transparent",borderRight:"8px solid transparent",borderTop:"12px solid rgba(255,255,255,0.95)"}}/>
+    <style>{`@keyframes bubbleIn{from{opacity:0;transform:scale(0.7) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}`}</style>
+  </div>;
+}
+
+// ─── DÉCOR ANIMÉ PAR SCÈNE ────────────────────────────────────────────────────────
+function SceneDecor({subject,sceneIdx,frame}){
+  const decorations={
+    maths:[
+      // Espace
+      <>
+        <div style={{position:"absolute",top:10,left:"10%",fontSize:18,animation:"twinkle 2s infinite",opacity:0.7}}>⭐</div>
+        <div style={{position:"absolute",top:20,right:"15%",fontSize:14,animation:"twinkle 2.5s infinite 0.5s",opacity:0.5}}>✨</div>
+        <div style={{position:"absolute",top:5,left:"50%",fontSize:20,animation:"twinkle 1.8s infinite 0.3s"}}>🌙</div>
+        <div style={{position:"absolute",bottom:10,right:"10%",fontSize:24,animation:"float 3s infinite"}}>🚀</div>
+        <div style={{position:"absolute",bottom:15,left:"8%",fontSize:16,animation:"float 2.5s infinite 0.5s"}}>🛸</div>
+      </>,
+      // Château
+      <>
+        <div style={{position:"absolute",top:8,left:"5%",fontSize:22,animation:"float 3s infinite"}}>⚡</div>
+        <div style={{position:"absolute",top:12,right:"8%",fontSize:18,animation:"float 2s infinite 0.3s"}}>🌟</div>
+        <div style={{position:"absolute",bottom:8,left:"15%",fontSize:24,animation:"float 2.5s infinite"}}>🏰</div>
+      </>,
+      // Île
+      <>
+        <div style={{position:"absolute",top:10,left:"8%",fontSize:20,animation:"float 2s infinite"}}>🌴</div>
+        <div style={{position:"absolute",top:15,right:"12%",fontSize:18,animation:"float 2.5s infinite 0.5s"}}>🦜</div>
+        <div style={{position:"absolute",bottom:8,right:"8%",fontSize:22,animation:"float 3s infinite"}}>💰</div>
+      </>,
+    ],
+    francais:[
+      <>
+        <div style={{position:"absolute",top:8,left:"8%",fontSize:20,animation:"float 3s infinite"}}>📜</div>
+        <div style={{position:"absolute",top:15,right:"10%",fontSize:18,animation:"float 2.5s infinite 0.3s"}}>🪶</div>
+        <div style={{position:"absolute",bottom:10,left:"12%",fontSize:22,animation:"float 2s infinite"}}>📚</div>
+      </>,
+      <>
+        <div style={{position:"absolute",top:8,left:"5%",fontSize:22,animation:"float 2s infinite"}}>🎭</div>
+        <div style={{position:"absolute",top:12,right:"8%",fontSize:18,animation:"float 3s infinite 0.5s"}}>🎪</div>
+        <div style={{position:"absolute",bottom:8,right:"15%",fontSize:20,animation:"float 2.5s infinite"}}>🎨</div>
+      </>,
+      <>
+        <div style={{position:"absolute",top:8,left:"8%",fontSize:20,animation:"float 3s infinite"}}>🌊</div>
+        <div style={{position:"absolute",top:15,right:"8%",fontSize:18,animation:"float 2s infinite 0.3s"}}>🐬</div>
+        <div style={{position:"absolute",bottom:8,left:"15%",fontSize:22,animation:"float 2.5s infinite"}}>🦀</div>
+      </>,
+    ],
+    anglais:[
+      <>
+        <div style={{position:"absolute",top:8,left:"8%",fontSize:20,animation:"float 3s infinite"}}>🗽</div>
+        <div style={{position:"absolute",top:12,right:"8%",fontSize:18,animation:"float 2s infinite 0.5s"}}>🚕</div>
+        <div style={{position:"absolute",bottom:10,right:"15%",fontSize:22,animation:"float 2.5s infinite"}}>🍎</div>
+      </>,
+      <>
+        <div style={{position:"absolute",top:8,left:"5%",fontSize:22,animation:"float 2.5s infinite"}}>🏴‍☠️</div>
+        <div style={{position:"absolute",top:15,right:"8%",fontSize:18,animation:"float 3s infinite 0.3s"}}>⚓</div>
+        <div style={{position:"absolute",bottom:8,left:"12%",fontSize:20,animation:"float 2s infinite"}}>🦜</div>
+      </>,
+      <>
+        <div style={{position:"absolute",top:8,left:"8%",fontSize:20,animation:"float 2s infinite"}}>🌿</div>
+        <div style={{position:"absolute",top:15,right:"10%",fontSize:18,animation:"float 3s infinite 0.5s"}}>🦋</div>
+        <div style={{position:"absolute",bottom:8,right:"8%",fontSize:22,animation:"float 2.5s infinite"}}>🐍</div>
+      </>,
+    ],
+    histoire:[
+      <>
+        <div style={{position:"absolute",top:8,left:"5%",fontSize:22,animation:"float 3s infinite"}}>🏛️</div>
+        <div style={{position:"absolute",top:12,right:"8%",fontSize:18,animation:"float 2s infinite 0.3s"}}>⚔️</div>
+        <div style={{position:"absolute",bottom:8,left:"15%",fontSize:20,animation:"float 2.5s infinite"}}>🦅</div>
+      </>,
+      <>
+        <div style={{position:"absolute",top:8,left:"8%",fontSize:20,animation:"float 2s infinite"}}>🗡️</div>
+        <div style={{position:"absolute",top:15,right:"8%",fontSize:18,animation:"float 3s infinite 0.5s"}}>🐉</div>
+        <div style={{position:"absolute",bottom:10,right:"12%",fontSize:22,animation:"float 2.5s infinite"}}>🏰</div>
+      </>,
+      <>
+        <div style={{position:"absolute",top:8,left:"8%",fontSize:22,animation:"float 3s infinite"}}>⛵</div>
+        <div style={{position:"absolute",top:12,right:"8%",fontSize:18,animation:"float 2s infinite 0.3s"}}>🌐</div>
+        <div style={{position:"absolute",bottom:8,left:"12%",fontSize:20,animation:"float 2.5s infinite"}}>🧭</div>
+      </>,
+    ],
+    sciences:[
+      <>
+        <div style={{position:"absolute",top:8,left:"8%",fontSize:20,animation:"float 3s infinite"}}>🌿</div>
+        <div style={{position:"absolute",top:12,right:"10%",fontSize:18,animation:"float 2s infinite 0.5s"}}>🦋</div>
+        <div style={{position:"absolute",bottom:10,right:"8%",fontSize:22,animation:"float 2.5s infinite"}}>🐸</div>
+      </>,
+      <>
+        <div style={{position:"absolute",top:8,left:"5%",fontSize:22,animation:"float 2s infinite"}}>🪐</div>
+        <div style={{position:"absolute",top:15,right:"8%",fontSize:18,animation:"float 3s infinite 0.3s"}}>🌠</div>
+        <div style={{position:"absolute",bottom:8,left:"15%",fontSize:20,animation:"float 2.5s infinite"}}>🛸</div>
+      </>,
+      <>
+        <div style={{position:"absolute",top:8,left:"8%",fontSize:20,animation:"float 2.5s infinite"}}>⚗️</div>
+        <div style={{position:"absolute",top:12,right:"8%",fontSize:18,animation:"float 2s infinite 0.5s"}}>💊</div>
+        <div style={{position:"absolute",bottom:8,right:"12%",fontSize:22,animation:"float 3s infinite"}}>🔭</div>
+      </>,
+    ],
+  };
+  const subDecors=decorations[subject]||decorations.maths;
+  const decor=subDecors[sceneIdx%subDecors.length];
+  return <div style={{position:"absolute",inset:0,pointerEvents:"none",overflow:"hidden"}}>
+    {decor}
+    <style>{`
+      @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+      @keyframes twinkle{0%,100%{opacity:0.3;transform:scale(0.9)}50%{opacity:1;transform:scale(1.1)}}
+    `}</style>
+  </div>;
+}
+
+// ─── TIMER VISUEL ─────────────────────────────────────────────────────────────────
+function TimerRing({seconds,max,color}){
+  const pct=(seconds/max)*100;
+  const r=22,circ=2*Math.PI*r;
+  const urgent=seconds<=5;
+  return <div style={{position:"relative",width:54,height:54}}>
+    <svg width="54" height="54" style={{transform:"rotate(-90deg)"}}>
+      <circle cx="27" cy="27" r={r} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="4"/>
+      <circle cx="27" cy="27" r={r} fill="none" stroke={urgent?"#f87171":color} strokeWidth="4"
+        strokeDasharray={circ} strokeDashoffset={circ*(1-pct/100)}
+        style={{transition:"stroke-dashoffset 1s linear",filter:urgent?"drop-shadow(0 0 4px #f87171)":"none"}}/>
+    </svg>
+    <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",color:urgent?"#f87171":"#fff",fontWeight:900,fontSize:16}}>{seconds}</div>
+  </div>;
+}
+
+// ─── STADE ANIMÉ ─────────────────────────────────────────────────────────────────
+function StadeView({owned}){
+  const hasPitch=owned.includes("pitch_premium"),hasLights=owned.includes("floodlights"),
+    hasScreen=owned.includes("scoreboard"),hasSeats=owned.includes("seat_basic"),
+    hasVIP=owned.includes("seat_vip"),hasTrophy=owned.includes("trophy_cup");
+  const players=["player_gk","player_df","player_md","player_at"].filter(p=>owned.includes(p));
+  const hasKit=owned.includes("kit_home")||owned.includes("kit_away");
+  const [ballX,setBallX]=useState(50),[ballY,setBallY]=useState(50);
+  const [crowd,setCrowd]=useState(false),[frame,setFrame]=useState(0);
+  const rafRef=useRef(null),dx=useRef(1.4),dy=useRef(0.9);
+  useEffect(()=>{
+    let bx=50,by=50;
+    const step=()=>{
+      bx+=dx.current;by+=dy.current;
+      if(bx<8||bx>92)dx.current*=-1;
+      if(by<22||by>78)dy.current*=-1;
+      setBallX(bx);setBallY(by);
+      setFrame(f=>f+1);
+      rafRef.current=requestAnimationFrame(step);
+    };
+    rafRef.current=requestAnimationFrame(step);
+    return()=>cancelAnimationFrame(rafRef.current);
+  },[]);
+  useEffect(()=>{if(frame%50===0)setCrowd(c=>!c);},[frame]);
+  const playerPos=[{x:12,y:50},{x:28,y:30},{x:28,y:70},{x:50,y:50},{x:72,y:30},{x:72,y:70},{x:88,y:50}];
+  return(
+    <div style={{width:"100%",height:270,borderRadius:20,overflow:"hidden",position:"relative",background:hasLights?"linear-gradient(180deg,#020617,#0d2137)":"linear-gradient(180deg,#1a3a1a,#0d2010)",border:"2px solid rgba(255,255,255,0.1)"}}>
+      {hasLights&&[0,1,2,3].map(i=><div key={i} style={{position:"absolute",top:-10,left:`${15+i*23}%`,width:5,height:55,background:"linear-gradient(180deg,#fffbe6,transparent)",opacity:0.55,borderRadius:3}}/>)}
+      <div style={{position:"absolute",top:0,left:0,right:0,height:46,background:hasSeats?"linear-gradient(180deg,#1a2a6c,#23539a)":"linear-gradient(180deg,#333,#444)",display:"flex",alignItems:"center",justifyContent:"center",gap:2,overflow:"hidden"}}>
+        {hasSeats&&Array.from({length:38}).map((_,i)=><div key={i} style={{width:8,height:13,borderRadius:"3px 3px 0 0",background:crowd&&i%3===0?"#ef4444":i%2===0?"#1d4ed8":"#2563eb",transition:"background 0.4s",flexShrink:0}}/>)}
+        {!hasSeats&&<span style={{color:"rgba(255,255,255,0.25)",fontSize:11}}>Pas encore de tribunes</span>}
+        {hasVIP&&<div style={{position:"absolute",right:10,top:4,background:"gold",borderRadius:6,padding:"2px 7px",fontSize:10,fontWeight:800,color:"#333"}}>VIP 💎</div>}
+      </div>
+      {hasScreen&&<div style={{position:"absolute",top:48,left:"50%",transform:"translateX(-50%)",background:"#111",border:"2px solid #333",borderRadius:5,padding:"2px 7px",fontSize:11,fontWeight:800,color:"#4ade80",zIndex:5}}>📺 {Math.floor(ballX/12)}:{Math.floor(ballY/12)}</div>}
+      <div style={{position:"absolute",top:46,left:0,right:0,bottom:46,background:hasPitch?"linear-gradient(180deg,#16a34a,#15803d,#16a34a)":"linear-gradient(180deg,#166534,#14532d)"}}>
+        <div style={{position:"absolute",inset:0,border:"2px solid rgba(255,255,255,0.2)",margin:"7px 11px",borderRadius:3}}/>
+        <div style={{position:"absolute",left:"50%",top:0,bottom:0,width:1,background:"rgba(255,255,255,0.18)"}}/>
+        <div style={{position:"absolute",left:"50%",top:"50%",transform:"translate(-50%,-50%)",width:46,height:46,borderRadius:"50%",border:"2px solid rgba(255,255,255,0.18)"}}/>
+        <div style={{position:"absolute",left:3,top:"33%",width:12,height:"34%",border:"2px solid rgba(255,255,255,0.45)",borderLeft:"none",background:"rgba(255,255,255,0.04)"}}/>
+        <div style={{position:"absolute",right:3,top:"33%",width:12,height:"34%",border:"2px solid rgba(255,255,255,0.45)",borderRight:"none",background:"rgba(255,255,255,0.04)"}}/>
+        {players.map((pid,i)=>{
+          const pos=playerPos[i%playerPos.length];
+          const bounce=Math.sin(frame*0.08+i)*4;
+          return <div key={pid} style={{position:"absolute",left:`${pos.x}%`,top:`calc(${pos.y}% + ${bounce}px)`,transform:"translate(-50%,-50%)",fontSize:hasKit?20:15,filter:"drop-shadow(0 2px 4px rgba(0,0,0,0.8))",zIndex:3}}>{["🧤","🛡️","🎯","⚡"][i]||"👤"}</div>;
+        })}
+        <div style={{position:"absolute",left:`${ballX}%`,top:`${ballY}%`,transform:"translate(-50%,-50%)",fontSize:17,filter:"drop-shadow(0 2px 6px rgba(0,0,0,0.9))",zIndex:4}}>⚽</div>
+      </div>
+      <div style={{position:"absolute",bottom:0,left:0,right:0,height:46,background:hasSeats?"linear-gradient(0deg,#1a2a6c,#23539a)":"linear-gradient(0deg,#333,#444)",display:"flex",alignItems:"center",justifyContent:"center",gap:2,overflow:"hidden"}}>
+        {hasSeats&&Array.from({length:38}).map((_,i)=><div key={i} style={{width:8,height:13,borderRadius:"0 0 3px 3px",background:crowd&&i%4===0?"#ef4444":i%2===0?"#1d4ed8":"#2563eb",transition:"background 0.4s",flexShrink:0}}/>)}
+      </div>
+      {hasTrophy&&<div style={{position:"absolute",top:52,right:10,fontSize:26,animation:"trophyRot 2s ease-in-out infinite",zIndex:6}}>🏆<style>{`@keyframes trophyRot{0%,100%{transform:rotate(-10deg) scale(1)}50%{transform:rotate(10deg) scale(1.2)}}`}</style></div>}
+      {players.length===0&&owned.length<2&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,0.45)"}}>
+        <div style={{textAlign:"center",color:"rgba(255,255,255,0.55)"}}>
+          <div style={{fontSize:30}}>🏟️</div>
+          <div style={{fontSize:12,marginTop:6}}>Achète pour construire ton stade !</div>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+// ─── VILLE ANIMÉE ─────────────────────────────────────────────────────────────────
+function VilleView({owned}){
+  const [frame,setFrame]=useState(0);
+  const rafRef=useRef(null);
+  useEffect(()=>{const s=()=>{setFrame(f=>f+1);rafRef.current=requestAnimationFrame(s);};rafRef.current=requestAnimationFrame(s);return()=>cancelAnimationFrame(rafRef.current);},[]);
+  const charX1=((frame*0.4)%110)-5, charX2=100-((frame*0.25)%110), charX3=((frame*0.3+40)%110)-5;
+  const cloudX1=((frame*0.15)%130)-10, cloudX2=((frame*0.1+50)%130)-10;
+  const hascastle=owned.includes("castle"),haslighthouse=owned.includes("lighthouse"),
+    hasschool=owned.includes("school"),hashospital=owned.includes("hospital"),
+    haslibrary=owned.includes("library"),hasbakery=owned.includes("bakery"),
+    hascinema=owned.includes("cinema"),haspark=owned.includes("park"),
+    hasfount=owned.includes("fountain"),haskid=owned.includes("char_kid"),
+    hasartist=owned.includes("char_artist"),hasrainbow=owned.includes("rainbow");
+  return(
+    <div style={{width:"100%",height:270,borderRadius:20,overflow:"hidden",position:"relative",background:hasrainbow?"linear-gradient(180deg,#f0abfc,#818cf8,#6ee7b7)":"linear-gradient(180deg,#1e1b4b,#312e81,#4c1d95)",border:"2px solid rgba(255,255,255,0.1)"}}>
+      <div style={{position:"absolute",left:`${cloudX1}%`,top:10,fontSize:22,opacity:0.45}}>☁️</div>
+      <div style={{position:"absolute",left:`${cloudX2}%`,top:22,fontSize:16,opacity:0.3}}>☁️</div>
+      {hasrainbow&&<div style={{position:"absolute",top:0,left:0,right:0,height:110,background:"linear-gradient(180deg,rgba(248,113,113,0.3),rgba(251,191,36,0.2),rgba(74,222,128,0.2),rgba(96,165,250,0.2),transparent)"}}/>}
+      <div style={{position:"absolute",bottom:62,left:0,right:0,display:"flex",alignItems:"flex-end",justifyContent:"space-around",padding:"0 8px",gap:4}}>
+        {hascastle&&<div style={{animation:"floatCity 3s ease-in-out infinite"}}><span style={{fontSize:40}}>🏰</span><style>{`@keyframes floatCity{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}`}</style></div>}
+        {haslighthouse&&<div><div style={{width:5,height:14,background:`hsl(${frame*5%360},100%,70%)`,borderRadius:99,marginBottom:2,transition:"background 0.08s",marginLeft:"auto",marginRight:"auto"}}/>  <span style={{fontSize:34}}>🗼</span></div>}
+        {hasschool&&<span style={{fontSize:34}}>🏫</span>}
+        {hashospital&&<span style={{fontSize:34}}>🏥</span>}
+        {!hascastle&&!haslighthouse&&!hasschool&&!hashospital&&<div style={{color:"rgba(255,255,255,0.2)",fontSize:12,textAlign:"center",paddingBottom:20,width:"100%"}}>Construis ta ville !</div>}
+      </div>
+      <div style={{position:"absolute",bottom:0,left:0,right:0,height:62,background:"linear-gradient(180deg,#166534,#14532d)",borderTop:"3px solid #15803d"}}>
+        <div style={{position:"absolute",left:0,right:0,top:22,height:18,background:"#374151",display:"flex",alignItems:"center"}}>
+          {Array.from({length:12}).map((_,i)=><div key={i} style={{width:18,height:3,background:"#fbbf24",marginLeft:14,opacity:0.8,borderRadius:2}}/>)}
+        </div>
+        {haspark&&<span style={{position:"absolute",left:"5%",bottom:38,fontSize:20}}>🌳</span>}
+        {haspark&&<span style={{position:"absolute",left:"14%",bottom:38,fontSize:16}}>🌸</span>}
+        {hasfount&&<span style={{position:"absolute",left:"28%",bottom:38,fontSize:20,animation:"bounce 1.5s ease-in-out infinite"}}>⛲<style>{`@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}`}</style></span>}
+        {hasbakery&&<span style={{position:"absolute",left:"48%",bottom:38,fontSize:18}}>🥐</span>}
+        {hascinema&&<span style={{position:"absolute",right:"14%",bottom:38,fontSize:18}}>🎬</span>}
+        {haslibrary&&<span style={{position:"absolute",right:"5%",bottom:38,fontSize:18}}>📚</span>}
+        {haskid&&charX1>-5&&charX1<105&&<div style={{position:"absolute",left:`${charX1}%`,bottom:42,fontSize:17}}>👧🏽</div>}
+        {hasartist&&charX2>-5&&charX2<105&&<div style={{position:"absolute",left:`${charX2}%`,bottom:42,fontSize:17}}>🎨</div>}
+        {(haskid||hasartist)&&charX3>-5&&charX3<105&&<div style={{position:"absolute",left:`${charX3}%`,bottom:42,fontSize:15}}>🚶‍♀️</div>}
+        {owned.length>=3&&<div style={{position:"absolute",left:`${((frame*0.6)%110)-5}%`,bottom:26,fontSize:18}}>🚗</div>}
+        {owned.length>=6&&<div style={{position:"absolute",left:`${100-((frame*0.35+30)%110)}%`,bottom:26,fontSize:16,transform:"scaleX(-1)"}}>🚙</div>}
+        {hascastle&&<div style={{position:"absolute",left:`${((frame*0.2+60)%110)-5}%`,bottom:26,fontSize:15}}>🐴</div>}
+      </div>
+      <div style={{position:"absolute",top:8,right:8,background:"rgba(0,0,0,0.5)",backdropFilter:"blur(6px)",borderRadius:10,padding:"4px 9px",fontSize:11,color:"#fff"}}>👥 {20+owned.length*8} • ⭐ {Math.min(100,owned.length*9)}%</div>
+    </div>
+  );
+}
+
+// ─── SETUP ────────────────────────────────────────────────────────────────────────
+function SetupScreen({onComplete}){
+  const [pseudo,setPseudo]=useState(""),  [theme,setTheme]=useState(null);
+  const [level,setLevel]=useState("cm1-cm2"), [step,setStep]=useState(1);
+  const next=()=>{
+    if(step===1&&pseudo.trim())setStep(2);
+    else if(step===2&&theme)setStep(3);
+    else if(step===3)onComplete(createProfile(pseudo.trim(),theme,level));
+  };
+  return(
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:theme?THEMES[theme].bg:"linear-gradient(135deg,#1a1a2e,#16213e,#0f3460)",padding:24,transition:"background 0.5s",fontFamily:"'Nunito','Segoe UI',sans-serif"}}>
+      <div style={{textAlign:"center",marginBottom:32}}>
+        <div style={{fontSize:52}}>🌴</div>
+        <h1 style={{fontSize:28,fontWeight:900,color:"#fff",margin:"8px 0 4px",letterSpacing:"-0.5px"}}>Cahier de Vacances</h1>
+        <p style={{color:"rgba(255,255,255,0.5)",margin:0,fontSize:14}}>Apprends, joue, progresse !</p>
+      </div>
+      <div style={{width:"100%",maxWidth:380,background:"rgba(255,255,255,0.08)",backdropFilter:"blur(20px)",borderRadius:24,padding:28,border:"1px solid rgba(255,255,255,0.13)",boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
+        <div style={{display:"flex",gap:8,marginBottom:24,justifyContent:"center"}}>
+          {[1,2,3].map(s=><div key={s} style={{width:s===step?32:10,height:10,borderRadius:99,transition:"all 0.3s",background:s<=step?"#fff":"rgba(255,255,255,0.2)"}}/>)}
+        </div>
+        {step===1&&(<>
+          <p style={{color:"rgba(255,255,255,0.9)",fontSize:18,fontWeight:700,marginBottom:16,textAlign:"center"}}>Comment tu t'appelles ? 👋</p>
+          <input autoFocus value={pseudo} onChange={e=>setPseudo(e.target.value)} onKeyDown={e=>e.key==="Enter"&&next()} placeholder="Ton prénom ou pseudo..."
+            style={{width:"100%",padding:"14px 16px",borderRadius:14,border:"2px solid rgba(255,255,255,0.25)",background:"rgba(255,255,255,0.1)",color:"#fff",fontSize:16,fontWeight:600,outline:"none",boxSizing:"border-box"}}/>
+        </>)}
+        {step===2&&(<>
+          <p style={{color:"rgba(255,255,255,0.9)",fontSize:18,fontWeight:700,marginBottom:16,textAlign:"center"}}>Ton univers de jeu, {pseudo} ? 🎮</p>
+          <div style={{display:"flex",gap:12}}>
+            {Object.entries(THEMES).map(([key,t])=>(
+              <button key={key} onClick={()=>setTheme(key)} style={{flex:1,padding:"20px 12px",borderRadius:16,border:`2px solid ${theme===key?t.accent:"rgba(255,255,255,0.17)"}`,background:theme===key?`${t.accent}22`:"rgba(255,255,255,0.07)",color:"#fff",cursor:"pointer",transform:theme===key?"scale(1.04)":"scale(1)",transition:"all 0.2s",display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
+                <span style={{fontSize:36}}>{t.emoji}</span>
+                <span style={{fontSize:13,fontWeight:700,textAlign:"center",lineHeight:1.2}}>{t.name}</span>
+              </button>
+            ))}
+          </div>
+        </>)}
+        {step===3&&(<>
+          <p style={{color:"rgba(255,255,255,0.9)",fontSize:18,fontWeight:700,marginBottom:16,textAlign:"center"}}>Ton niveau scolaire 📚</p>
+          {LEVELS.map(l=>(
+            <button key={l.id} onClick={()=>setLevel(l.id)} style={{width:"100%",padding:"14px 18px",borderRadius:14,border:`2px solid ${level===l.id?"#fff":"rgba(255,255,255,0.17)"}`,background:level===l.id?"rgba(255,255,255,0.2)":"rgba(255,255,255,0.07)",color:"#fff",cursor:"pointer",fontSize:15,fontWeight:600,textAlign:"left",marginBottom:10,transition:"all 0.2s",display:"flex",justifyContent:"space-between"}}>
+              <span>{l.label}</span>{level===l.id&&<span>✓</span>}
+            </button>
+          ))}
+        </>)}
+        <button onClick={next} disabled={(step===1&&!pseudo.trim())||(step===2&&!theme)} style={{marginTop:20,width:"100%",padding:15,borderRadius:14,border:"none",background:((step===1&&!pseudo.trim())||(step===2&&!theme))?"rgba(255,255,255,0.18)":"linear-gradient(135deg,#FFD700,#FF8C00)",color:"#1a1a1a",fontSize:16,fontWeight:800,cursor:"pointer"}}>
+          {step<3?"Continuer →":"C'est parti ! 🚀"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── HOME ─────────────────────────────────────────────────────────────────────────
+function HomeScreen({profile,onSubject,onRetry,onShop,onLeaderboard,onExam,onReset,onPlayMG,onDuo,onBoss,onSeasons,onStory,onReminderSettings,reminderDismissed,onDismissReminder}){
+  const theme=THEMES[profile.theme];
+  const {stats,weakTopics={},streak=0,earnedBadges=[]}=profile;
+  const accuracy=stats.total>0?Math.round((stats.correct/stats.total)*100):0;
+  const levelInfo=LEVELS.find(l=>l.id===profile.level);
+  const weekend=isWeekend();
+  const weak=Object.entries(weakTopics).map(([t,s])=>({topic:t,rate:s.total>0?s.correct/s.total:1,total:s.total})).filter(x=>x.total>=2&&x.rate<0.7).sort((a,b)=>a.rate-b.rate).slice(0,3);
+  const [challenges,setChallenges]=useState([]);
+  const [toast,setToast]=useState(null);
+  useEffect(()=>{
+    (async()=>{
+      const keys=await sharedList("challenge:");
+      const all=await Promise.all(keys.map(async k=>{try{const r=await window.storage.get(k,true);return r?JSON.parse(r.value):null;}catch{return null;}}));
+      setChallenges(all.filter(c=>c&&c.to===profile.pseudo&&!c.accepted&&Date.now()-c.ts<86400000));
+    })();
+  },[]);
+  const acceptChallenge=async(c)=>{
+    await sharedSet(`challenge:${c.id}`,{...c,accepted:true});
+    onSubject(c.subject);
+    setToast(`Défi de ${c.from} accepté ! 🥊`);setTimeout(()=>setToast(null),2000);
+  };
+  return(
+    <div style={{minHeight:"100vh",background:theme.bg,fontFamily:"'Nunito','Segoe UI',sans-serif",paddingBottom:80}}>
+      <div style={{padding:"18px 18px 12px",background:"rgba(0,0,0,0.3)",backdropFilter:"blur(10px)",borderBottom:`1px solid ${theme.border}33`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:1}}>{levelInfo.label}</div>
+            <h2 style={{margin:0,color:"#fff",fontSize:22,fontWeight:900}}>{theme.emoji} {profile.pseudo}</h2>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <button onClick={onLeaderboard} style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.18)",borderRadius:12,padding:"7px 11px",color:"#fff",cursor:"pointer",fontSize:18}}>🏆</button>
+            <div style={{background:"rgba(255,215,0,0.15)",border:"1px solid rgba(255,215,0,0.38)",borderRadius:20,padding:"7px 14px",display:"flex",alignItems:"center",gap:6}}>
+              <span>⭐</span><span style={{color:"#FFD700",fontWeight:800,fontSize:18}}>{profile.stars}</span>
+            </div>
+          </div>
+        </div>
+        <div style={{marginTop:10,display:"flex",gap:10,fontSize:12,color:"rgba(255,255,255,0.5)",flexWrap:"wrap"}}>
+          <span>🎯 {accuracy}%</span><span>•</span><span>📝 {stats.sessions} sessions</span>
+          {streak>0&&<><span>•</span><span style={{color:"#fb923c",fontWeight:700}}>🔥 Série ×{streak}</span></>}
+        </div>
+        {earnedBadges.length>0&&<div style={{marginTop:8,display:"flex",gap:6,flexWrap:"wrap"}}>{earnedBadges.map((b,i)=><span key={i} title={b.label} style={{fontSize:20}}>{b.emoji}</span>)}</div>}
+        {weekend&&<div style={{marginTop:10,padding:"8px 14px",borderRadius:12,background:"rgba(251,146,60,0.18)",border:"1px solid rgba(251,146,60,0.45)",display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:18}}>🔥</span>
+          <div><div style={{color:"#FFD700",fontWeight:800,fontSize:13}}>BONUS WEEK-END !</div>
+          <div style={{color:"rgba(255,255,255,0.65)",fontSize:11}}>×2 étoiles sur toutes les bonnes réponses</div></div>
+        </div>}
+      </div>
+      <div style={{padding:"16px 16px 0"}}>
+        {challenges.map(c=>(
+          <div key={c.id} style={{marginBottom:12,padding:"12px 16px",borderRadius:14,background:"rgba(250,204,21,0.15)",border:"1px solid rgba(250,204,21,0.45)",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div>
+              <div style={{color:"#fbbf24",fontWeight:800,fontSize:14}}>🥊 Défi de {c.from} !</div>
+              <div style={{color:"rgba(255,255,255,0.65)",fontSize:12}}>{SUBJECTS.find(s=>s.id===c.subject)?.label}</div>
+            </div>
+            <button onClick={()=>acceptChallenge(c)} style={{padding:"8px 14px",borderRadius:10,background:"linear-gradient(135deg,#FFD700,#FF8C00)",border:"none",color:"#1a1a1a",fontWeight:800,fontSize:13,cursor:"pointer"}}>Relever !</button>
+          </div>
+        ))}
+        {/* Banner rappel */}
+        {!reminderDismissed&&<DailyReminderBanner profile={profile} onDismiss={onDismissReminder} onSettings={onReminderSettings}/>}
+        {weak.length>0&&<div style={{marginBottom:16}}>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:8}}>⚡ Points à retravailler</div>
+          {weak.map(w=>(
+            <button key={w.topic} onClick={()=>onRetry(w.topic)} style={{width:"100%",padding:"11px 14px",borderRadius:13,border:"1px solid rgba(248,113,113,0.38)",background:"rgba(255,60,60,0.1)",color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",fontSize:14,fontWeight:700,marginBottom:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:18}}>🎯</span>
+                <div style={{textAlign:"left"}}>
+                  <div>{w.topic}</div>
+                  <div style={{fontSize:11,color:"rgba(255,160,160,0.75)",fontWeight:400}}>{Math.round(w.rate*100)}% réussite</div>
+                </div>
+              </div>
+              <span style={{fontSize:12,color:"rgba(255,160,160,0.7)"}}>Réviser →</span>
+            </button>
+          ))}
+        </div>}
+        <MinigameUnlockBanner profile={profile} onPlay={onPlayMG}/>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:10}}>Choisir une matière</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          {SUBJECTS.map(s=>(
+            <button key={s.id} onClick={()=>onSubject(s.id)} style={{padding:"16px 13px",borderRadius:16,border:`1px solid ${s.color}44`,background:`${s.color}18`,color:"#fff",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"flex-start",gap:5,transition:"all 0.2s"}}
+              onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.background=`${s.color}2e`;}}
+              onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.background=`${s.color}18`;}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:22}}>{s.emoji}</span>
+                <span style={{fontSize:20}}>{s.mascot}</span>
+              </div>
+              <span style={{fontWeight:800,fontSize:14}}>{s.label}</span>
+              <span style={{fontSize:11,color:s.color}}>{weekend?"×2 ":""}+5⭐/bonne réponse</span>
+            </button>
+          ))}
+          <button onClick={onExam} style={{padding:"16px 13px",borderRadius:16,border:"1px solid rgba(255,215,0,0.38)",background:"rgba(255,215,0,0.1)",color:"#fff",cursor:"pointer",gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:12}}>
+            <span style={{fontSize:28}}>📋</span>
+            <div>
+              <div style={{fontWeight:800,fontSize:15}}>Examen Blanc</div>
+              <div style={{fontSize:12,color:"rgba(255,215,0,0.8)",marginTop:2}}>20 questions toutes matières</div>
+            </div>
+            <span style={{marginLeft:"auto",fontSize:20}}>→</span>
+          </button>
+          <button onClick={()=>onDuo&&onDuo()} style={{padding:"16px 13px",borderRadius:16,border:"1px solid rgba(255,165,0,0.5)",background:"rgba(255,165,0,0.1)",color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:12,transition:"all 0.2s"}}>
+            <span style={{fontSize:28}}>⚔️</span>
+            <div><div style={{fontWeight:800,fontSize:15}}>Mode Duo</div><div style={{fontSize:12,color:"rgba(255,165,0,0.9)",marginTop:2}}>Défie l'autre tablette en live !</div></div>
+            <span style={{marginLeft:"auto",fontSize:20}}>→</span>
+          </button>
+          <button onClick={()=>onBoss&&onBoss()} style={{padding:"16px 13px",borderRadius:16,border:"1px solid rgba(220,38,38,0.5)",background:"rgba(220,38,38,0.1)",color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:12,transition:"all 0.2s"}}>
+            <span style={{fontSize:28}}>🧙‍♂️</span>
+            <div><div style={{fontWeight:800,fontSize:15}}>Boss Final</div><div style={{fontSize:12,color:"rgba(248,113,113,0.9)",marginTop:2}}>Affronte le Maître des Savoirs !</div></div>
+            <span style={{marginLeft:"auto",fontSize:20}}>⚔️</span>
+          </button>
+          <button onClick={()=>onStory&&onStory()} style={{padding:"16px 13px",borderRadius:16,border:"1px solid rgba(255,200,0,0.45)",background:"rgba(255,200,0,0.08)",color:"#fff",cursor:"pointer",gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:12,transition:"all 0.2s"}}>
+            <span style={{fontSize:28}}>📖</span>
+            <div><div style={{fontWeight:800,fontSize:15}}>L'Épopée du Savoir</div><div style={{fontSize:12,color:"rgba(255,200,0,0.85)",marginTop:2}}>Suis l'arc narratif de tes vacances !</div></div>
+            <span style={{marginLeft:"auto",fontSize:20}}>→</span>
+          </button>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={()=>onSeasons&&onSeasons()} style={{flex:1,padding:"13px 10px",borderRadius:14,border:"1px solid rgba(255,255,255,0.18)",background:"rgba(255,255,255,0.07)",color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:22}}>📅</span>
+              <div style={{textAlign:"left"}}>
+                <div style={{fontWeight:800,fontSize:13}}>Mes Saisons</div>
+                <div style={{fontSize:11,color:"rgba(255,255,255,0.45)"}}>Historique</div>
+              </div>
+            </button>
+            <button onClick={()=>onReminderSettings&&onReminderSettings()} style={{flex:1,padding:"13px 10px",borderRadius:14,border:"1px solid rgba(255,255,255,0.18)",background:"rgba(255,255,255,0.07)",color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:22}}>⏰</span>
+              <div style={{textAlign:"left"}}>
+                <div style={{fontWeight:800,fontSize:13}}>Rappels</div>
+                <div style={{fontSize:11,color:"rgba(255,255,255,0.45)"}}>Réglages</div>
+              </div>
+            </button>
+          </div>
+          <button onClick={onShop} style={{padding:"16px 13px",borderRadius:16,border:`1px solid ${theme.accent}55`,background:`${theme.accent}18`,color:"#fff",cursor:"pointer",gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:12}}>
+            <span style={{fontSize:28}}>{theme.emoji}</span>
+            <div>
+              <div style={{fontWeight:800,fontSize:15}}>Mon {theme.name}</div>
+              <div style={{fontSize:12,color:theme.accent,marginTop:2}}>{profile.owned.length} éléments • {profile.stars}⭐</div>
+            </div>
+            <span style={{marginLeft:"auto",fontSize:20}}>→</span>
+          </button>
+        </div>
+      </div>
+      <div style={{padding:"20px 16px 0",textAlign:"center"}}>
+        <button onClick={onReset} style={{background:"none",border:"none",color:"rgba(255,255,255,0.18)",fontSize:11,cursor:"pointer",textDecoration:"underline"}}>Changer de profil</button>
+      </div>
+      {toast&&<Toast msg={toast} accent={theme.accent}/>}
+    </div>
+  );
+}
+
+// ─── QUIZ LUDIQUE ─────────────────────────────────────────────────────────────────
+function QuizScreen({profile,subjectId,forceTopic,examMode,onBack,onEarnStars,voiceEnabled=false}){
+  const speechSupported=!!(window.SpeechRecognition||window.webkitSpeechRecognition);
+  const voiceLang=(sid)=>sid==="anglais"?"en-GB":"fr-FR";
+  const [autoRead,setAutoRead]=useState(false);
+  const theme=THEMES[profile.theme];
+  const weekend=isWeekend(); const MULT=weekend?2:1;
+  const SESSION=examMode?20:8;
+  const subjectList=["maths","francais","anglais","histoire","sciences"];
+  const getSubId=()=>examMode?subjectList[Math.floor(asked/4)%subjectList.length]:subjectId;
+  const getSub=(id)=>SUBJECTS.find(s=>s.id===id)||SUBJECTS[0];
+
+  const [q,setQ]=useState(null), [loading,setLoading]=useState(true), [error,setError]=useState(null);
+  const [selected,setSelected]=useState(null), [openAns,setOpenAns]=useState("");
+  const [revealed,setRevealed]=useState(false), [feedback,setFeedback]=useState(null);
+  const [score,setScore]=useState(0), [asked,setAsked]=useState(0);
+  const [prevTopics,setPrevTopics]=useState([]), [streak,setStreak]=useState(0);
+  const [badgePopup,setBadgePopup]=useState(null), [particles,setParticles]=useState(null);
+  const [mascotState,setMascotState]=useState("idle");
+  const [showHint,setShowHint]=useState(false), [hintUsed,setHintUsed]=useState(false);
+  const [sceneIdx,setSceneIdx]=useState(0);
+  const [timerActive,setTimerActive]=useState(false), [timerVal,setTimerVal]=useState(20);
+  const timerRef=useRef(null);
+
+  const curSubId=examMode?subjectList[Math.floor(asked/4)%subjectList.length]:subjectId;
+  const curSub=getSub(curSubId);
+  const scenario=curSub.scenarios[sceneIdx%curSub.scenarios.length];
+
+  const load=useCallback(async()=>{
+    setLoading(true);setError(null);setSelected(null);setOpenAns("");
+    setRevealed(false);setFeedback(null);setMascotState("thinking");
+    setShowHint(false);setHintUsed(false);
+    clearInterval(timerRef.current);setTimerActive(false);setTimerVal(20);
+    try{
+      const sid=examMode?subjectList[Math.floor(asked/4)%subjectList.length]:subjectId;
+      const qq=await generateQuestion(sid,profile.level,prevTopics,forceTopic,examMode);
+      setQ(qq);setMascotState("talk");
+      if(autoRead||voiceEnabled)setTimeout(()=>speak(qq.question,voiceLang(examMode?subjectList[Math.floor(asked/4)%subjectList.length]:subjectId)),300);
+      // Activer timer pour QCM uniquement
+      if(qq.type==="qcm"){
+        setTimerActive(true);setTimerVal(20);
+        timerRef.current=setInterval(()=>{
+          setTimerVal(v=>{
+            if(v<=1){clearInterval(timerRef.current);setTimerActive(false);if(!revealed)commit(false,qq);return 0;}
+            return v-1;
+          });
+        },1000);
+      }
+      setTimeout(()=>setMascotState("idle"),1500);
+    }catch{setError("Connexion impossible.");setMascotState("idle");}
+    setLoading(false);
+  },[subjectId,profile.level,prevTopics,forceTopic,asked]);
+
+  useEffect(()=>{load();},[]);
+  useEffect(()=>()=>clearInterval(timerRef.current),[]);
+
+  const commit=(isCorrect,qOverride=null)=>{
+    clearInterval(timerRef.current);setTimerActive(false);
+    const qq=qOverride||q;
+    const ns=isCorrect?streak+1:0;
+    setStreak(ns);
+    const badge=STREAK_BADGES.slice().reverse().find(b=>b.streak===ns);
+    if(badge){setBadgePopup(badge);setTimeout(()=>setBadgePopup(null),2500);}
+    setFeedback(isCorrect?"correct":"wrong");
+    setRevealed(true);
+    setMascotState(isCorrect?"correct":"wrong");
+    setParticles(isCorrect?"win":"lose");
+    setTimeout(()=>setParticles(null),1200);
+    if(isCorrect)setScore(s=>s+1);
+    if(qq&&qq.topic)setPrevTopics(p=>[...p,qq.topic]);
+    onEarnStars(isCorrect?5*MULT:0,isCorrect,1,qq?.topic,ns);
+    setTimeout(()=>setMascotState("idle"),1000);
+  };
+
+  const handleQCM=(letter)=>{if(!revealed){setSelected(letter);commit(letter===q.answer);}};
+  const handleOpen=()=>{
+    if(!openAns.trim()||revealed)return;
+    const u=openAns.trim().toLowerCase(),a=q.answer.toLowerCase();
+    commit(u===a||u.includes(a)||a.includes(u));
+  };
+  const handleNext=()=>{
+    if(asked+1>=SESSION)onBack(score,SESSION,streak);
+    else{setAsked(n=>n+1);setSceneIdx(i=>i+1);load();}
+  };
+  const handleHint=()=>{setShowHint(true);setHintUsed(true);};
+
+  const choiceColors=["#4ECDC4","#FF6B9D","#A855F7","#F59E0B"];
+
+  return(
+    <div style={{minHeight:"100vh",background:scenario.bg,fontFamily:"'Nunito','Segoe UI',sans-serif",display:"flex",flexDirection:"column",position:"relative"}}>
+      {/* Décor animé */}
+      {!loading&&<SceneDecor subject={curSubId} sceneIdx={sceneIdx} frame={0}/>}
+
+      {/* Particules */}
+      {particles&&<Particles type={particles}/>}
+
+      {/* Header */}
+      <div style={{padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"rgba(0,0,0,0.4)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(255,255,255,0.1)",position:"relative",zIndex:10}}>
+        <button onClick={()=>onBack(score,asked,streak)} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:10,padding:"8px 12px",color:"#fff",fontSize:16,cursor:"pointer"}}>← Quitter</button>
+        <div style={{textAlign:"center"}}>
+          <div style={{color:"rgba(255,255,255,0.6)",fontSize:10,textTransform:"uppercase",letterSpacing:1}}>{scenario.scene}</div>
+          <div style={{color:"#fff",fontWeight:800,fontSize:13}}>{examMode?"📋 Examen":curSub.label}</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {q?.type==="qcm"&&timerActive&&<TimerRing seconds={timerVal} max={20} color={curSub.color}/>}
+          <div style={{textAlign:"right"}}>
+            <div style={{color:"#FFD700",fontWeight:800,fontSize:16}}>{score*5*MULT}⭐</div>
+            <div style={{color:"rgba(255,255,255,0.4)",fontSize:11}}>{asked+1}/{SESSION}</div>
+          </div>
+        </div>
+      </div>
+      <div style={{padding:"4px 16px",position:"relative",zIndex:10}}>
+        <ProgressBar value={asked+(revealed?1:0)} max={SESSION} color={curSub.color} height={6}/>
+      </div>
+
+      {/* Contenu principal */}
+      <div style={{flex:1,padding:"12px 14px 20px",overflowY:"auto",position:"relative",zIndex:5}}>
+        {loading&&(
+          <div style={{textAlign:"center",paddingTop:60}}>
+            <div style={{fontSize:50,display:"inline-block",animation:"mascotThink 1.5s ease-in-out infinite"}}>{curSub.mascot}</div>
+            <p style={{color:"rgba(255,255,255,0.6)",marginTop:12,fontWeight:700}}>En train de réfléchir...</p>
+            <style>{`@keyframes mascotThink2{0%,100%{transform:rotate(-5deg) translateY(0)}50%{transform:rotate(5deg) translateY(-5px)}}`}</style>
+          </div>
+        )}
+        {error&&<div style={{textAlign:"center",paddingTop:40}}>
+          <div style={{fontSize:40}}>📡</div>
+          <p style={{color:"rgba(255,255,255,0.75)",marginTop:12}}>{error}</p>
+          <button onClick={load} style={{marginTop:16,padding:"12px 24px",borderRadius:12,background:curSub.color,border:"none",color:"#fff",fontWeight:700,cursor:"pointer"}}>Réessayer</button>
+        </div>}
+
+        {!loading&&!error&&q&&(
+          <>
+            {/* Mascotte + bulle de dialogue */}
+            <div style={{display:"flex",alignItems:"flex-end",gap:12,marginBottom:16}}>
+              <Mascot emoji={curSub.mascot} state={mascotState} size={52}/>
+              <div style={{display:"flex",flexDirection:"column",gap:6,flex:1}}>
+                {q.context&&<div style={{display:"inline-block",background:`${curSub.color}33`,border:`1px solid ${curSub.color}66`,borderRadius:99,padding:"3px 10px",color:curSub.color,fontSize:11,fontWeight:700,alignSelf:"flex-start"}}>{q.context}</div>}
+                <SpeechBubble text={`${curSub.mascotName} : ${scenario.intro}`} color={curSub.color}/>
+              </div>
+            </div>
+
+            {/* Carte question */}
+            <div style={{background:"rgba(0,0,0,0.5)",backdropFilter:"blur(16px)",borderRadius:20,padding:"18px 16px",border:`1px solid ${curSub.color}44`,marginBottom:16,boxShadow:`0 8px 32px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.1)`}}>
+              {q.topic&&<div style={{display:"inline-block",padding:"3px 10px",background:`${curSub.color}33`,border:`1px solid ${curSub.color}55`,borderRadius:99,color:curSub.color,fontSize:10,fontWeight:700,marginBottom:10,textTransform:"uppercase",letterSpacing:1}}>{q.topic}</div>}
+              <p style={{color:"#fff",fontSize:17,fontWeight:700,margin:0,lineHeight:1.55}}>{q.question}</p>
+              {/* Indice */}
+              {!revealed&&q.hint&&(
+                <div style={{marginTop:10}}>
+                  {!showHint?(
+                    <button onClick={handleHint} style={{background:"rgba(255,255,255,0.08)",border:"1px dashed rgba(255,255,255,0.25)",borderRadius:10,padding:"6px 12px",color:"rgba(255,255,255,0.55)",fontSize:12,cursor:"pointer",fontWeight:600}}>
+                      💡 Voir un indice {hintUsed?"(déjà utilisé)":""}
+                    </button>
+                  ):(
+                    <div style={{marginTop:6,padding:"8px 12px",background:"rgba(255,215,0,0.12)",border:"1px solid rgba(255,215,0,0.3)",borderRadius:10,animation:"bubbleIn 0.3s ease both"}}>
+                      <span style={{color:"#FFD700",fontSize:12,fontWeight:600}}>💡 {q.hint}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Boutons vocaux */}
+            {voiceEnabled&&q&&<VoiceButtons text={q.question} lang={voiceLang(curSubId)} subjectId={curSubId} question={q} speechSupported={speechSupported} onSpeech={(transcript)=>{if(q.type==="open"&&!revealed){setOpenAns(transcript);}}}/>}
+
+            {/* Choix QCM */}
+            {q.type==="qcm"&&(
+              <div style={{display:"flex",flexDirection:"column",gap:9}}>
+                {(q.choices||[]).map((choice,i)=>{
+                  const letter=["A","B","C","D"][i];
+                  const isC=letter===q.answer, isSel=selected===letter;
+                  let bg="rgba(255,255,255,0.07)",border="rgba(255,255,255,0.15)",icon="";
+                  if(revealed){
+                    if(isC){bg=`rgba(74,222,128,0.22)`;border="#4ade80";icon="✓";}
+                    else if(isSel){bg="rgba(248,113,113,0.22)";border="#f87171";icon="✗";}
+                  } else if(isSel){bg=`${choiceColors[i]}33`;border=choiceColors[i];}
+                  return <button key={i} onClick={()=>handleQCM(letter)} disabled={revealed}
+                    style={{padding:"13px 14px",borderRadius:14,border:`2px solid ${border}`,background:bg,color:"#fff",cursor:revealed?"default":"pointer",display:"flex",alignItems:"center",gap:11,fontSize:14,fontWeight:600,textAlign:"left",transition:"all 0.15s",transform:isSel&&!revealed?"scale(0.99)":"scale(1)"}}>
+                    <span style={{width:30,height:30,borderRadius:"50%",background:`${choiceColors[i]}44`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:13,flexShrink:0,color:choiceColors[i]}}>{letter}</span>
+                    <span style={{flex:1}}>{choice.replace(/^[ABCD]\)\s*/,"")}</span>
+                    {icon&&<span style={{fontSize:20,animation:icon==="✓"?"popIn 0.3s cubic-bezier(0.34,1.56,0.64,1)":"shake 0.3s ease"}}>{icon}</span>}
+                  </button>;
+                })}
+              </div>
+            )}
+
+            {/* Question ouverte */}
+            {q.type==="open"&&<div>
+              <input value={openAns} onChange={e=>setOpenAns(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleOpen()} disabled={revealed}
+                placeholder="Ta réponse..."
+                style={{width:"100%",padding:"14px 16px",borderRadius:14,border:`2px solid ${revealed?(feedback==="correct"?"#4ade80":"#f87171"):"rgba(255,255,255,0.25)"}`,background:"rgba(0,0,0,0.4)",backdropFilter:"blur(8px)",color:"#fff",fontSize:16,fontWeight:700,outline:"none",boxSizing:"border-box",marginBottom:10}}/>
+              {!revealed&&<button onClick={handleOpen} disabled={!openAns.trim()} style={{width:"100%",padding:14,borderRadius:14,background:openAns.trim()?`linear-gradient(135deg,${curSub.color},${curSub.color}88)`:"rgba(255,255,255,0.1)",border:"none",color:"#fff",fontWeight:800,fontSize:15,cursor:openAns.trim()?"pointer":"not-allowed",boxShadow:openAns.trim()?`0 4px 20px ${curSub.color}44`:"none"}}>
+                Valider ✓
+              </button>}
+            </div>}
+
+            {/* Feedback */}
+            {revealed&&(
+              <div style={{marginTop:14,padding:"14px 16px",borderRadius:18,background:feedback==="correct"?"rgba(0,0,0,0.5)":"rgba(0,0,0,0.5)",backdropFilter:"blur(12px)",border:`2px solid ${feedback==="correct"?"#4ade80":"#f87171"}`,boxShadow:`0 8px 32px ${feedback==="correct"?"rgba(74,222,128,0.2)":"rgba(248,113,113,0.2)"}`,animation:"popIn 0.4s cubic-bezier(0.34,1.56,0.64,1)"}}>
+                <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:8}}>
+                  <Mascot emoji={curSub.mascot} state={feedback} size={36}/>
+                  <SpeechBubble text={feedback==="correct"?`Excellent ! +${5*MULT}⭐${weekend?" (×2 week-end !)":""}${streak>=3?` Série de ${streak} 🔥`:""}`:q.explanation||"Pas tout à fait, mais tu vas y arriver !"} color={curSub.color} animate={true}/>
+                </div>
+                {feedback==="wrong"&&<div style={{padding:"8px 12px",background:"rgba(255,255,255,0.07)",borderRadius:10,marginBottom:10}}>
+                  <span style={{color:"rgba(255,255,255,0.7)",fontSize:13}}>✅ La bonne réponse : <strong style={{color:"#4ade80"}}>{q.answer}</strong></span>
+                </div>}
+                <button onClick={handleNext} style={{width:"100%",padding:13,borderRadius:12,border:"none",background:"linear-gradient(135deg,#FFD700,#FF8C00)",color:"#1a1a1a",fontWeight:800,fontSize:15,cursor:"pointer",boxShadow:"0 4px 16px rgba(255,215,0,0.4)",animation:"popIn 0.4s 0.2s cubic-bezier(0.34,1.56,0.64,1) both"}}>
+                  {asked+1>=SESSION?(examMode?"Voir mon bulletin 📋":"Voir le résultat 🏁"):"Question suivante →"}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Badge popup */}
+      {badgePopup&&(
+        <div style={{position:"fixed",top:"30%",left:"50%",transform:"translate(-50%,-50%)",background:"rgba(10,10,20,0.96)",backdropFilter:"blur(16px)",borderRadius:28,padding:"28px 36px",textAlign:"center",zIndex:9999,border:"2px solid #FFD700",boxShadow:"0 0 60px rgba(255,215,0,0.5)",animation:"popIn 0.4s cubic-bezier(0.34,1.56,0.64,1)"}}>
+          <div style={{fontSize:64}}>{badgePopup.emoji}</div>
+          <div style={{color:"#FFD700",fontWeight:900,fontSize:22,marginTop:10}}>{badgePopup.label}</div>
+          <div style={{color:"rgba(255,255,255,0.55)",fontSize:13,marginTop:5}}>Badge débloqué !</div>
+        </div>
+      )}
+      <style>{`@keyframes popIn{from{opacity:0;transform:scale(0.5)}to{opacity:1;transform:scale(1)}}@keyframes shake{0%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}100%{transform:translateX(0)}}`}</style>
+    </div>
+  );
+}
+
+// ─── RÉSULTAT ─────────────────────────────────────────────────────────────────────
+function ResultScreen({score,total,starsEarned,theme,weekend,examMode,onHome}){
+  const t=THEMES[theme];
+  const pct=Math.round((score/total)*100);
+  const mention=examMode?(pct>=90?"Très Bien 🏆":pct>=75?"Bien 🥇":pct>=60?"Assez Bien 🥈":pct>=50?"Passable 🥉":"À travailler 💪"):null;
+  const msg=pct>=80?"Excellent ! 🔥":pct>=60?"Bien joué ! 💪":pct>=40?"Continue ! 📈":"Réessaie ! 🎮";
+  return(
+    <div style={{minHeight:"100vh",background:t.bg,fontFamily:"'Nunito','Segoe UI',sans-serif",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24,textAlign:"center"}}>
+      <div style={{fontSize:64,marginBottom:10,animation:"mascotCorrect 0.8s cubic-bezier(0.34,1.56,0.64,1)"}}>{pct>=80?"🏆":pct>=60?"🥈":pct>=40?"🥉":"💫"}</div>
+      {examMode&&<div style={{fontSize:12,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:2,marginBottom:8}}>Bulletin d'examen</div>}
+      <h2 style={{color:"#fff",fontSize:26,fontWeight:900,margin:"0 0 6px"}}>{examMode?mention:msg}</h2>
+      {!examMode&&<div style={{fontSize:48,fontWeight:900,color:t.accent,margin:"6px 0"}}>{score}/{total}</div>}
+      {examMode&&<div style={{background:"rgba(255,255,255,0.1)",borderRadius:20,padding:"20px 28px",margin:"12px 0",width:"100%",maxWidth:300}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><span style={{color:"rgba(255,255,255,0.6)"}}>Score</span><span style={{color:"#fff",fontWeight:800}}>{score}/{total}</span></div>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}><span style={{color:"rgba(255,255,255,0.6)"}}>Résultat</span><span style={{color:t.accent,fontWeight:800}}>{pct}%</span></div>
+        <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:"rgba(255,255,255,0.6)"}}>Mention</span><span style={{color:"#FFD700",fontWeight:800}}>{mention}</span></div>
+      </div>}
+      {!examMode&&<p style={{color:"rgba(255,255,255,0.55)",fontSize:15}}>{pct}% de réussite</p>}
+      <div style={{margin:"12px 0 22px",padding:"13px 26px",borderRadius:18,background:"rgba(255,215,0,0.14)",border:"1px solid rgba(255,215,0,0.38)"}}>
+        <span style={{fontSize:26,fontWeight:900,color:"#FFD700"}}>+{starsEarned} ⭐</span>
+        {weekend&&<div style={{color:"#FFD700",fontSize:12,marginTop:3}}>🔥 Bonus week-end inclus !</div>}
+      </div>
+      <button onClick={onHome} style={{padding:"14px 38px",borderRadius:15,background:"linear-gradient(135deg,#FFD700,#FF8C00)",border:"none",color:"#1a1a1a",fontWeight:800,fontSize:15,cursor:"pointer"}}>Retour à l'accueil</button>
+      <style>{`@keyframes mascotCorrect{0%{transform:scale(1)}30%{transform:scale(1.3) rotate(15deg)}60%{transform:scale(0.9)}100%{transform:scale(1)}}`}</style>
+    </div>
+  );
+}
+
+// ─── SHOP ─────────────────────────────────────────────────────────────────────────
+function ShopScreen({profile,onBack,onBuy}){
+  const theme=THEMES[profile.theme];
+  const items=profile.theme==="foot"?FOOT_SHOP:CITY_SHOP;
+  const types=[...new Set(items.map(i=>i.type))];
+  const [activeType,setActiveType]=useState("view");
+  const [toast,setToast]=useState(null);
+  const typeLabels={stade:"🏟️ Stade",joueur:"⚽ Joueurs",equip:"👕 Équipement",trophee:"🏆 Trophées",nature:"🌳 Nature",batiment:"🏗️ Bâtiments",commerce:"🛒 Commerces",special:"✨ Spécial",habitant:"👥 Habitants"};
+  const handleBuy=(item)=>{
+    if(profile.owned.includes(item.id))return;
+    if(profile.stars<item.cost){setToast("Pas assez d'étoiles !");setTimeout(()=>setToast(null),2000);return;}
+    onBuy(item);setToast(`${item.emoji} Débloqué !`);setTimeout(()=>setToast(null),1500);
+  };
+  return(
+    <div style={{minHeight:"100vh",background:theme.bg,fontFamily:"'Nunito','Segoe UI',sans-serif",display:"flex",flexDirection:"column"}}>
+      <div style={{padding:"14px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"rgba(0,0,0,0.3)",backdropFilter:"blur(10px)",borderBottom:`1px solid ${theme.border}33`}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:"#fff",fontSize:24,cursor:"pointer"}}>←</button>
+        <div style={{textAlign:"center"}}><div style={{fontSize:20}}>{theme.emoji}</div><div style={{color:"#fff",fontWeight:800,fontSize:14}}>{theme.name}</div></div>
+        <div style={{textAlign:"right"}}><div style={{color:"#FFD700",fontWeight:800,fontSize:18}}>{profile.stars}⭐</div></div>
+      </div>
+      <div style={{padding:"10px 14px 0",overflowX:"auto"}}>
+        <div style={{display:"flex",gap:8,paddingBottom:2}}>
+          <button onClick={()=>setActiveType("view")} style={{padding:"7px 14px",borderRadius:99,border:`1px solid ${activeType==="view"?theme.accent:"rgba(255,255,255,0.17)"}`,background:activeType==="view"?`${theme.accent}33`:"rgba(255,255,255,0.07)",color:"#fff",cursor:"pointer",whiteSpace:"nowrap",fontSize:12,fontWeight:700}}>
+            {profile.theme==="foot"?"🏟️ Mon Stade":"🏙️ Ma Ville"}
+          </button>
+          {types.map(t=>(
+            <button key={t} onClick={()=>setActiveType(t)} style={{padding:"7px 14px",borderRadius:99,border:`1px solid ${activeType===t?theme.accent:"rgba(255,255,255,0.17)"}`,background:activeType===t?`${theme.accent}33`:"rgba(255,255,255,0.07)",color:"#fff",cursor:"pointer",whiteSpace:"nowrap",fontSize:12,fontWeight:700}}>
+              {typeLabels[t]||t}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{flex:1,padding:"12px 14px",overflowY:"auto"}}>
+        {activeType==="view"&&(<>
+          {profile.theme==="foot"?<StadeView owned={profile.owned}/>:<VilleView owned={profile.owned}/>}
+          <div style={{marginTop:12,padding:"12px 14px",borderRadius:14,background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.1)"}}>
+            <div style={{color:"rgba(255,255,255,0.5)",fontSize:12,marginBottom:6}}>Collection ({profile.owned.length}/{items.length})</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {profile.owned.map(id=>{const it=items.find(i=>i.id===id);return it?<span key={id} title={it.name} style={{fontSize:22}}>{it.emoji}</span>:null;})}
+              {profile.owned.length===0&&<span style={{color:"rgba(255,255,255,0.3)",fontSize:13}}>Gagne des ⭐ pour débloquer !</span>}
+            </div>
+          </div>
+        </>)}
+        {activeType!=="view"&&(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            {items.filter(i=>i.type===activeType).map(item=>{
+              const owned=profile.owned.includes(item.id),can=profile.stars>=item.cost;
+              return <div key={item.id} style={{background:owned?`${theme.accent}22`:"rgba(255,255,255,0.07)",borderRadius:15,padding:"14px 12px",border:`1px solid ${owned?theme.accent:"rgba(255,255,255,0.1)"}`,display:"flex",flexDirection:"column",gap:5,opacity:!owned&&!can?0.55:1}}>
+                <span style={{fontSize:32}}>{item.emoji}</span>
+                <span style={{color:"#fff",fontWeight:800,fontSize:13,lineHeight:1.3}}>{item.name}</span>
+                <span style={{color:"rgba(255,255,255,0.45)",fontSize:11}}>{item.desc}</span>
+                {owned?<span style={{color:theme.accent,fontSize:12,fontWeight:700}}>✓ Débloqué</span>:(
+                  <button onClick={()=>handleBuy(item)} style={{marginTop:3,padding:"7px 0",borderRadius:9,background:can?"linear-gradient(135deg,#FFD700,#FF8C00)":"rgba(255,255,255,0.1)",border:"none",color:can?"#1a1a1a":"rgba(255,255,255,0.33)",fontWeight:800,fontSize:12,cursor:can?"pointer":"not-allowed"}}>
+                    {item.cost} ⭐
+                  </button>
+                )}
+              </div>;
+            })}
+          </div>
+        )}
+      </div>
+      {toast&&<Toast msg={toast} accent={theme.accent}/>}
+    </div>
+  );
+}
+
+// ─── LEADERBOARD ──────────────────────────────────────────────────────────────────
+function LeaderboardScreen({profile,onBack}){
+  const theme=THEMES[profile.theme];
+  const weekId=getWeekId();
+  const [entries,setEntries]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [toast,setToast]=useState(null);
+  useEffect(()=>{
+    (async()=>{
+      const myStars=(profile.weeklyStars||{})[weekId]||0;
+      await sharedSet(`board:${profile.pseudo}`,{pseudo:profile.pseudo,stars:myStars,weekId,ts:Date.now()});
+      const keys=await sharedList("board:");
+      const all=await Promise.all(keys.map(async k=>{try{const r=await window.storage.get(k,true);return r?JSON.parse(r.value):null;}catch{return null;}}));
+      setEntries(all.filter(e=>e&&e.weekId===weekId).sort((a,b)=>b.stars-a.stars));
+      setLoading(false);
+    })();
+  },[]);
+  const sendChallenge=async(opponent,subject)=>{
+    const id=`${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await sharedSet(`challenge:${id}`,{id,from:profile.pseudo,to:opponent,subject,accepted:false,ts:Date.now()});
+    setToast(`Défi envoyé à ${opponent} ! 🥊`);setTimeout(()=>setToast(null),2500);
+  };
+  const medals=["🥇","🥈","🥉"];
+  const myWeekStars=(profile.weeklyStars||{})[weekId]||0;
+  return(
+    <div style={{minHeight:"100vh",background:theme.bg,fontFamily:"'Nunito','Segoe UI',sans-serif",display:"flex",flexDirection:"column"}}>
+      <div style={{padding:"14px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",background:"rgba(0,0,0,0.3)",backdropFilter:"blur(10px)",borderBottom:`1px solid ${theme.border}33`}}>
+        <button onClick={onBack} style={{background:"none",border:"none",color:"#fff",fontSize:24,cursor:"pointer"}}>←</button>
+        <div style={{textAlign:"center"}}><div style={{fontSize:20}}>🏆</div><div style={{color:"#fff",fontWeight:800,fontSize:14}}>Classement semaine</div></div>
+        <div style={{width:40}}/>
+      </div>
+      <div style={{flex:1,padding:"18px 14px"}}>
+        <div style={{background:`${theme.accent}22`,borderRadius:15,padding:"14px 16px",border:`1px solid ${theme.accent}55`,marginBottom:18,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{color:"rgba(255,255,255,0.5)",fontSize:12}}>Cette semaine</div>
+            <div style={{color:"#fff",fontWeight:900,fontSize:20}}>{profile.pseudo}</div>
+            {profile.maxStreak>0&&<div style={{color:"#fb923c",fontSize:12,marginTop:2}}>🔥 Meilleure série : ×{profile.maxStreak}</div>}
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{color:"#FFD700",fontWeight:900,fontSize:28}}>{myWeekStars}</div>
+            <div style={{color:"rgba(255,255,255,0.4)",fontSize:11}}>⭐ cette semaine</div>
+          </div>
+        </div>
+        {loading?<div style={{textAlign:"center",paddingTop:30,color:"rgba(255,255,255,0.5)"}}>
+          <div style={{fontSize:30,display:"inline-block",animation:"spin 1s linear infinite"}}>⏳</div>
+          <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
+        </div>:entries.length===0?(
+          <div style={{textAlign:"center",padding:"30px 20px"}}>
+            <div style={{fontSize:44}}>👥</div>
+            <p style={{color:"rgba(255,255,255,0.5)",fontSize:14,marginTop:12}}>Personne encore.<br/>Lance des révisions !</p>
+          </div>
+        ):(
+          <div style={{display:"flex",flexDirection:"column",gap:9}}>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.38)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:4}}>{entries.length} joueur{entries.length>1?"s":""}</div>
+            {entries.map((e,i)=>{
+              const isMe=e.pseudo===profile.pseudo;
+              return <div key={e.pseudo} style={{padding:"13px 14px",borderRadius:13,background:isMe?`${theme.accent}22`:"rgba(255,255,255,0.07)",border:`1px solid ${isMe?theme.accent:"rgba(255,255,255,0.11)"}`,display:"flex",alignItems:"center",gap:12}}>
+                <span style={{fontSize:22,width:30,textAlign:"center"}}>{medals[i]||`${i+1}`}</span>
+                <div style={{flex:1}}><div style={{color:"#fff",fontWeight:700,fontSize:14}}>{e.pseudo}{isMe?" (toi)":""}</div></div>
+                <div style={{color:"#FFD700",fontWeight:800,fontSize:17,marginRight:isMe?0:8}}>{e.stars} ⭐</div>
+                {!isMe&&(
+                  <div style={{display:"flex",gap:5}}>
+                    {SUBJECTS.slice(0,3).map(s=>(
+                      <button key={s.id} onClick={()=>sendChallenge(e.pseudo,s.id)} title={`Défier en ${s.label}`}
+                        style={{padding:"5px 7px",borderRadius:8,background:"rgba(255,255,255,0.12)",border:"1px solid rgba(255,255,255,0.2)",color:"#fff",cursor:"pointer",fontSize:14}}>
+                        {s.emoji}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>;
+            })}
+          </div>
+        )}
+        <div style={{marginTop:18,padding:"12px 14px",borderRadius:13,background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.09)"}}>
+          <p style={{color:"rgba(255,255,255,0.4)",fontSize:12,margin:0,lineHeight:1.6}}>
+            ℹ️ Classement partagé entre tablettes. Remise à zéro le lundi.<br/>Appuie sur un emoji pour envoyer un défi !
+          </p>
+        </div>
+      </div>
+      {toast&&<Toast msg={toast} accent={theme.accent}/>}
+    </div>
+  );
+}
+
+// ─── MINI-JEUX CONFIG ─────────────────────────────────────────────────────────────
+// Chaque palier débloque UN mini-jeu. Après y avoir joué, recharge dans 10 nouvelles questions.
+const MINIGAMES_DEF = [
+  { id:"penalty",  threshold:10,  recharge:10, label:"Penalty !",        emoji:"🥅", color:"#4ade80", desc:"Tire au but, marque un max !" },
+  { id:"wordsnap",  threshold:20, recharge:10, label:"Mot Caché",        emoji:"🔤", color:"#FF6B9D", desc:"Trouve le mot mystère en 30s !" },
+  { id:"flashquiz", threshold:30, recharge:10, label:"Quiz Flash",       emoji:"⚡", color:"#F59E0B", desc:"5 questions ultra-rapides !" },
+  { id:"wheel",     threshold:40, recharge:10, label:"Roue Bonus",       emoji:"🎡", color:"#A855F7", desc:"Fais tourner la roue !" },
+  { id:"memory",    threshold:50, recharge:10, label:"Mémoire",           emoji:"🧠", color:"#4ECDC4", desc:"Retrouve toutes les paires !" },
+];
+
+// Retourne les mini-jeux disponibles pour ce profil
+function getAvailableMinigames(profile) {
+  const total = profile.stats.total || 0;
+  const played = profile.playedMinigames || {}; // { id: lastPlayedAtTotal }
+  return MINIGAMES_DEF.filter(mg => {
+    if (total < mg.threshold) return false; // pas encore débloqué
+    const lastAt = played[mg.id];
+    if (lastAt === undefined) return true;   // jamais joué
+    return (total - lastAt) >= mg.recharge;  // rechargé
+  });
+}
+
+// Prochain mini-jeu à débloquer
+function getNextUnlock(profile) {
+  const total = profile.stats.total || 0;
+  return MINIGAMES_DEF.find(mg => total < mg.threshold);
+}
+
+// ─── MINI-JEU : PENALTY ──────────────────────────────────────────────────────────
+function MinigamePenalty({ profile, onEnd }) {
+  const theme = THEMES[profile.theme];
+  const SHOTS = 5;
+  const [phase, setPhase] = useState("intro"); // intro|aim|result|end
+  const [shot, setShot] = useState(0);
+  const [score, setScore] = useState(0);
+  const [aimX, setAimX] = useState(50);
+  const [aimY, setAimY] = useState(50);
+  const [gkPos, setGkPos] = useState(50);
+  const [shotResult, setShotResult] = useState(null); // "goal"|"saved"
+  const [history, setHistory] = useState([]);
+  const [ballAnim, setBallAnim] = useState(false);
+  const intervalRef = useRef(null);
+
+  // Gardien qui bouge en phase aim
+  useEffect(() => {
+    if (phase !== "aim") return;
+    intervalRef.current = setInterval(() => {
+      setGkPos(p => {
+        const d = (Math.random() - 0.5) * 30;
+        return Math.max(15, Math.min(85, p + d));
+      });
+    }, 600);
+    return () => clearInterval(intervalRef.current);
+  }, [phase, shot]);
+
+  const handleAim = (e) => {
+    if (phase !== "aim") return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    setAimX(x); setAimY(y);
+  };
+
+  const shoot = () => {
+    if (phase !== "aim") return;
+    clearInterval(intervalRef.current);
+    setBallAnim(true);
+    // Gardien saute vers un côté aléatoire
+    const gkJump = Math.random() < 0.5 ? 20 : 80;
+    setGkPos(gkJump);
+    // But si gardien pas au bon endroit
+    const isGoal = Math.abs(aimX - gkJump) > 18 && aimY < 80;
+    setTimeout(() => {
+      setShotResult(isGoal ? "goal" : "saved");
+      if (isGoal) setScore(s => s + 1);
+      setHistory(h => [...h, isGoal ? "⚽" : "🧤"]);
+      setBallAnim(false);
+      setPhase("result");
+    }, 700);
+  };
+
+  const nextShot = () => {
+    if (shot + 1 >= SHOTS) {
+      setPhase("end");
+    } else {
+      setShot(s => s + 1);
+      setAimX(50); setAimY(50); setGkPos(50);
+      setShotResult(null);
+      setPhase("aim");
+    }
+  };
+
+  const bonus = score * 8; // 8 étoiles par but
+
+  return (
+    <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0f4c2a,#1a7a45,#0d3d22)", fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column", alignItems:"center", padding:"20px 16px" }}>
+      <div style={{ width:"100%", maxWidth:400 }}>
+        {/* Header */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+          <div style={{ color:"#fff", fontWeight:900, fontSize:22 }}>🥅 Penalty</div>
+          <div style={{ color:"#FFD700", fontWeight:800, fontSize:18 }}>{score}/{SHOTS} ⚽</div>
+        </div>
+
+        {phase === "intro" && (
+          <div style={{ textAlign:"center", paddingTop:40 }}>
+            <div style={{ fontSize:80, animation:"bounce2 0.8s ease-in-out infinite" }}>⚽</div>
+            <h2 style={{ color:"#fff", fontSize:24, fontWeight:900, marginTop:16 }}>Tirs au but !</h2>
+            <p style={{ color:"rgba(255,255,255,0.7)", fontSize:15 }}>Appuie là où tu veux tirer, puis shoote ! Le gardien va sauter...</p>
+            <p style={{ color:"#4ade80", fontWeight:700, fontSize:14, marginTop:8 }}>+8⭐ par but marqué</p>
+            <button onClick={() => setPhase("aim")} style={{ marginTop:24, padding:"15px 40px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:16, cursor:"pointer" }}>
+              C'est parti ! ⚽
+            </button>
+            <style>{`@keyframes bounce2{0%,100%{transform:translateY(0)}50%{transform:translateY(-16px)}}`}</style>
+          </div>
+        )}
+
+        {(phase === "aim" || phase === "result") && (
+          <>
+            {/* Historique des tirs */}
+            <div style={{ display:"flex", gap:8, justifyContent:"center", marginBottom:16 }}>
+              {history.map((r,i) => <span key={i} style={{ fontSize:24 }}>{r}</span>)}
+              {Array.from({ length: SHOTS - history.length }).map((_,i) => <span key={i} style={{ fontSize:24, opacity:0.3 }}>⚪</span>)}
+            </div>
+
+            {/* Terrain */}
+            <div
+              onClick={handleAim}
+              style={{ width:"100%", aspectRatio:"16/9", background:"linear-gradient(180deg,#166534,#15803d)", borderRadius:16, position:"relative", overflow:"hidden", cursor:phase==="aim"?"crosshair":"default", border:"2px solid rgba(255,255,255,0.15)", userSelect:"none" }}
+            >
+              {/* Lignes terrain */}
+              <div style={{ position:"absolute", bottom:0, left:"10%", right:"10%", height:"55%", border:"2px solid rgba(255,255,255,0.3)", borderBottom:"none", borderRadius:"4px 4px 0 0" }} />
+              <div style={{ position:"absolute", bottom:0, left:"30%", right:"30%", height:"28%", border:"2px solid rgba(255,255,255,0.3)", borderBottom:"none" }} />
+              {/* But */}
+              <div style={{ position:"absolute", top:0, left:"20%", right:"20%", height:"28%", background:"rgba(255,255,255,0.08)", border:"2px solid rgba(255,255,255,0.5)", borderTop:"none", display:"flex", alignItems:"center", justifyContent:"center" }}>
+                <div style={{ position:"absolute", left:0, top:0, bottom:0, width:4, background:"rgba(255,255,255,0.4)", borderRadius:2 }} />
+                <div style={{ position:"absolute", right:0, top:0, bottom:0, width:4, background:"rgba(255,255,255,0.4)", borderRadius:2 }} />
+              </div>
+              {/* Gardien */}
+              <div style={{ position:"absolute", top:"8%", left:`${gkPos}%`, transform:"translateX(-50%)", fontSize:32, transition:"left 0.3s ease", filter:"drop-shadow(0 2px 4px rgba(0,0,0,0.5))" }}>🧤</div>
+              {/* Viseur */}
+              {phase === "aim" && (
+                <div style={{ position:"absolute", left:`${aimX}%`, top:`${aimY}%`, transform:"translate(-50%,-50%)", pointerEvents:"none" }}>
+                  <div style={{ width:30, height:30, border:"2px solid #FFD700", borderRadius:"50%", boxShadow:"0 0 10px #FFD700" }} />
+                  <div style={{ position:"absolute", top:"50%", left:-8, width:6, height:1, background:"#FFD700" }} />
+                  <div style={{ position:"absolute", top:"50%", right:-8, width:6, height:1, background:"#FFD700" }} />
+                  <div style={{ position:"absolute", left:"50%", top:-8, width:1, height:6, background:"#FFD700" }} />
+                  <div style={{ position:"absolute", left:"50%", bottom:-8, width:1, height:6, background:"#FFD700" }} />
+                </div>
+              )}
+              {/* Ballon animé */}
+              <div style={{ position:"absolute", bottom:"40%", left:"50%", transform:"translateX(-50%)", fontSize:28,
+                animation: ballAnim ? `ballShoot 0.7s ease forwards` : "none" }}>
+                ⚽
+                <style>{`@keyframes ballShoot{0%{transform:translateX(-50%) scale(1)}100%{transform:translateX(${aimX-50}px) translateY(-80px) scale(0.4)}}`}</style>
+              </div>
+              {/* Résultat */}
+              {phase === "result" && (
+                <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(0,0,0,0.5)", borderRadius:14 }}>
+                  <div style={{ textAlign:"center", animation:"popIn 0.4s cubic-bezier(0.34,1.56,0.64,1)" }}>
+                    <div style={{ fontSize:52 }}>{shotResult === "goal" ? "⚽" : "🧤"}</div>
+                    <div style={{ color: shotResult === "goal" ? "#4ade80" : "#f87171", fontWeight:900, fontSize:22, marginTop:4 }}>
+                      {shotResult === "goal" ? "BUT ! +8⭐" : "Arrêté !"}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {phase === "aim" && (
+              <div style={{ marginTop:16, textAlign:"center" }}>
+                <p style={{ color:"rgba(255,255,255,0.6)", fontSize:13, marginBottom:12 }}>Appuie sur le terrain pour viser, puis :</p>
+                <button onClick={shoot} style={{ padding:"14px 48px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:18, cursor:"pointer", boxShadow:"0 4px 20px rgba(255,215,0,0.4)" }}>
+                  SHOOT ! ⚽
+                </button>
+              </div>
+            )}
+            {phase === "result" && (
+              <div style={{ marginTop:16, textAlign:"center" }}>
+                <button onClick={nextShot} style={{ padding:"13px 40px", borderRadius:14, background:"rgba(255,255,255,0.15)", border:"1px solid rgba(255,255,255,0.3)", color:"#fff", fontWeight:800, fontSize:16, cursor:"pointer" }}>
+                  {shot + 1 >= SHOTS ? "Voir le score →" : "Tir suivant →"}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {phase === "end" && (
+          <div style={{ textAlign:"center", paddingTop:30 }}>
+            <div style={{ fontSize:64 }}>{score >= 4 ? "🏆" : score >= 2 ? "⚽" : "🧤"}</div>
+            <h2 style={{ color:"#fff", fontSize:26, fontWeight:900, marginTop:12 }}>
+              {score >= 4 ? "Sniper !" : score >= 2 ? "Pas mal !" : "Continue !"}
+            </h2>
+            <div style={{ display:"flex", gap:8, justifyContent:"center", margin:"16px 0" }}>
+              {history.map((r,i) => <span key={i} style={{ fontSize:28 }}>{r}</span>)}
+            </div>
+            <div style={{ padding:"14px 28px", background:"rgba(255,215,0,0.15)", border:"1px solid rgba(255,215,0,0.4)", borderRadius:18, display:"inline-block", marginBottom:24 }}>
+              <span style={{ color:"#FFD700", fontWeight:900, fontSize:26 }}>+{bonus} ⭐</span>
+              <p style={{ color:"rgba(255,255,255,0.55)", fontSize:12, margin:"4px 0 0" }}>{score} but{score>1?"s":""} marqué{score>1?"s":""}</p>
+            </div>
+            <br/>
+            <button onClick={() => onEnd(bonus)} style={{ padding:"14px 40px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:16, cursor:"pointer" }}>
+              Retour à l'accueil
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── MINI-JEU : MOT CACHÉ ────────────────────────────────────────────────────────
+const WORD_LISTS = [
+  { word:"ADDITION", hint:"Opération mathématique", category:"Maths" },
+  { word:"TRIANGLE", hint:"Forme géométrique à 3 côtés", category:"Maths" },
+  { word:"FRACTION", hint:"Numérateur sur dénominateur", category:"Maths" },
+  { word:"CONJUGAISON", hint:"Changer les formes des verbes", category:"Français" },
+  { word:"SYNONYME",   hint:"Mot qui veut dire la même chose", category:"Français" },
+  { word:"ELEPHANT",  hint:"Grand mammifère à trompe", category:"Sciences" },
+  { word:"OXYGENE",   hint:"Gaz que l'on respire", category:"Sciences" },
+  { word:"PYRAMIDE",  hint:"Monument égyptien", category:"Histoire" },
+  { word:"REPUBLIQUE",hint:"Forme de gouvernement française", category:"Histoire" },
+  { word:"BUTTERFLY", hint:"Comment dit-on papillon en anglais ?", category:"Anglais" },
+  { word:"SCHOOL",    hint:"Où on apprend... en anglais", category:"Anglais" },
+];
+
+function MinigameWordSnap({ profile, onEnd }) {
+  const TIME = 45;
+  const [phase, setPhase] = useState("intro");
+  const [wordDef] = useState(() => WORD_LISTS[Math.floor(Math.random() * WORD_LISTS.length)]);
+  const [revealed, setRevealed] = useState([]); // indices révélés
+  const [guess, setGuess] = useState("");
+  const [timeLeft, setTimeLeft] = useState(TIME);
+  const [result, setResult] = useState(null); // "win"|"lose"
+  const [attempts, setAttempts] = useState(0);
+  const timerRef = useRef(null);
+
+  const letters = wordDef.word.split("");
+  // Masque initial : révèle 1ère et dernière lettre
+  const initRevealed = [0, letters.length - 1];
+
+  useEffect(() => {
+    if (phase !== "play") return;
+    setRevealed(initRevealed);
+    timerRef.current = setInterval(() => {
+      setTimeLeft(t => {
+        if (t <= 1) {
+          clearInterval(timerRef.current);
+          setResult("lose");
+          setPhase("end");
+          return 0;
+        }
+        // Révèle une lettre de plus toutes les 10s
+        if ((t - 1) % 10 === 0) {
+          setRevealed(r => {
+            const hidden = letters.map((_,i)=>i).filter(i=>!r.includes(i));
+            if (hidden.length === 0) return r;
+            return [...r, hidden[Math.floor(Math.random()*hidden.length)]];
+          });
+        }
+        return t - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [phase]);
+
+  const handleGuess = () => {
+    if (!guess.trim()) return;
+    setAttempts(a => a + 1);
+    if (guess.trim().toUpperCase() === wordDef.word.toUpperCase()) {
+      clearInterval(timerRef.current);
+      setResult("win");
+      setPhase("end");
+      setRevealed(letters.map((_,i)=>i));
+    } else {
+      setGuess("");
+    }
+  };
+
+  const bonus = result === "win" ? Math.max(5, Math.floor(timeLeft / 3) * 3) : 0;
+  const urgentColor = timeLeft <= 10 ? "#f87171" : "#4ade80";
+
+  return (
+    <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#450a0a,#7f1d1d,#1a0533)", fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column", alignItems:"center", padding:"20px 16px" }}>
+      <div style={{ width:"100%", maxWidth:400 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+          <div style={{ color:"#fff", fontWeight:900, fontSize:22 }}>🔤 Mot Caché</div>
+          {phase === "play" && <div style={{ color:urgentColor, fontWeight:800, fontSize:20 }}>{timeLeft}s</div>}
+        </div>
+
+        {phase === "intro" && (
+          <div style={{ textAlign:"center", paddingTop:40 }}>
+            <div style={{ fontSize:80 }}>🔤</div>
+            <h2 style={{ color:"#fff", fontSize:22, fontWeight:900, marginTop:16 }}>Trouve le mot !</h2>
+            <p style={{ color:"rgba(255,255,255,0.7)", fontSize:15 }}>Un indice, des lettres cachées. Des lettres se révèlent avec le temps.</p>
+            <p style={{ color:"#FF6B9D", fontWeight:700, fontSize:14, marginTop:8 }}>Bonus : plus tu es rapide, plus tu gagnes ! ⭐</p>
+            <button onClick={() => setPhase("play")} style={{ marginTop:24, padding:"15px 40px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:16, cursor:"pointer" }}>
+              Jouer !
+            </button>
+          </div>
+        )}
+
+        {phase === "play" && (
+          <>
+            {/* Timer bar */}
+            <div style={{ height:8, background:"rgba(255,255,255,0.15)", borderRadius:99, marginBottom:20, overflow:"hidden" }}>
+              <div style={{ height:"100%", width:`${(timeLeft/TIME)*100}%`, background:urgentColor, borderRadius:99, transition:"width 1s linear, background 0.3s" }} />
+            </div>
+            {/* Indice */}
+            <div style={{ padding:"14px 16px", background:"rgba(255,255,255,0.1)", borderRadius:14, marginBottom:20, border:"1px solid rgba(255,255,255,0.2)" }}>
+              <div style={{ color:"rgba(255,255,255,0.5)", fontSize:11, textTransform:"uppercase", letterSpacing:1, marginBottom:4 }}>Indice • {wordDef.category}</div>
+              <div style={{ color:"#fff", fontWeight:700, fontSize:16 }}>💡 {wordDef.hint}</div>
+            </div>
+            {/* Lettres */}
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6, justifyContent:"center", marginBottom:24 }}>
+              {letters.map((l, i) => (
+                <div key={i} style={{ width:36, height:44, borderRadius:10, background:revealed.includes(i)?"rgba(255,107,157,0.3)":"rgba(255,255,255,0.1)", border:`2px solid ${revealed.includes(i)?"#FF6B9D":"rgba(255,255,255,0.2)"}`, display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontWeight:900, fontSize:18, transition:"all 0.3s" }}>
+                  {revealed.includes(i) ? l : "?"}
+                </div>
+              ))}
+            </div>
+            {/* Input */}
+            <div style={{ display:"flex", gap:8 }}>
+              <input value={guess} onChange={e=>setGuess(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleGuess()}
+                placeholder="Tape le mot..."
+                style={{ flex:1, padding:"13px 16px", borderRadius:12, border:"2px solid rgba(255,255,255,0.3)", background:"rgba(255,255,255,0.1)", color:"#fff", fontSize:15, fontWeight:700, outline:"none" }}
+              />
+              <button onClick={handleGuess} style={{ padding:"13px 16px", borderRadius:12, background:"#FF6B9D", border:"none", color:"#fff", fontWeight:800, fontSize:15, cursor:"pointer" }}>OK</button>
+            </div>
+            {attempts > 0 && <p style={{ color:"#f87171", fontSize:12, marginTop:8, textAlign:"center" }}>❌ Pas tout à fait... ({attempts} essai{attempts>1?"s":""})</p>}
+          </>
+        )}
+
+        {phase === "end" && (
+          <div style={{ textAlign:"center", paddingTop:30 }}>
+            <div style={{ fontSize:64 }}>{result === "win" ? "🎉" : "😅"}</div>
+            <h2 style={{ color:"#fff", fontSize:24, fontWeight:900, marginTop:12 }}>
+              {result === "win" ? "Trouvé !" : "Temps écoulé !"}
+            </h2>
+            <div style={{ fontSize:32, fontWeight:900, color:"#FF6B9D", letterSpacing:4, margin:"16px 0" }}>
+              {wordDef.word.split("").map((l,i)=><span key={i} style={{animation:`revealLetter 0.3s ${i*0.08}s both`,display:"inline-block"}}>{l}</span>)}
+            </div>
+            <p style={{ color:"rgba(255,255,255,0.6)", fontSize:14 }}>💡 {wordDef.hint}</p>
+            {result === "win" && <div style={{ padding:"14px 28px", background:"rgba(255,215,0,0.15)", border:"1px solid rgba(255,215,0,0.4)", borderRadius:18, display:"inline-block", margin:"16px 0" }}>
+              <span style={{ color:"#FFD700", fontWeight:900, fontSize:26 }}>+{bonus} ⭐</span>
+              <p style={{ color:"rgba(255,255,255,0.55)", fontSize:12, margin:"4px 0 0" }}>en {TIME - timeLeft}s • {attempts} essai{attempts>1?"s":""}</p>
+            </div>}
+            <br/>
+            <button onClick={() => onEnd(bonus)} style={{ padding:"14px 40px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:16, cursor:"pointer", marginTop:8 }}>
+              Retour
+            </button>
+            <style>{`@keyframes revealLetter{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}`}</style>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── MINI-JEU : QUIZ FLASH ───────────────────────────────────────────────────────
+const FLASH_QUESTIONS = [
+  { q:"2 × 7 = ?",          a:"14",    choices:["12","13","14","15"] },
+  { q:"Capitale de France ?",a:"Paris", choices:["Lyon","Paris","Rome","Berlin"] },
+  { q:"'Dog' en français ?", a:"Chien", choices:["Chat","Chien","Oiseau","Lapin"] },
+  { q:"8 + 9 = ?",           a:"17",    choices:["16","17","18","19"] },
+  { q:"Planète rouge ?",     a:"Mars",  choices:["Venus","Mercure","Mars","Jupiter"] },
+  { q:"3 × 8 = ?",           a:"24",    choices:["21","22","23","24"] },
+  { q:"Fleuve de Paris ?",   a:"Seine", choices:["Loire","Rhône","Seine","Garonne"] },
+  { q:"'Cat' en français ?", a:"Chat",  choices:["Chien","Chat","Poisson","Oiseau"] },
+  { q:"12 ÷ 4 = ?",          a:"3",     choices:["2","3","4","6"] },
+  { q:"Mammifère qui pond ?", a:"Ornithorynque", choices:["Dauphin","Baleine","Ornithorynque","Requin"] },
+];
+
+function MinigameFlashQuiz({ profile, onEnd }) {
+  const TOTAL = 5;
+  const TIME_PER_Q = 4;
+  const [phase, setPhase] = useState("intro");
+  const [qIdx, setQIdx] = useState(0);
+  const [questions] = useState(() => {
+    const shuffled = [...FLASH_QUESTIONS].sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, TOTAL);
+  });
+  const [score, setScore] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(TIME_PER_Q);
+  const [answered, setAnswered] = useState(null);
+  const [history, setHistory] = useState([]);
+  const timerRef = useRef(null);
+
+  const startTimer = () => {
+    setTimeLeft(TIME_PER_Q);
+    timerRef.current = setInterval(() => {
+      setTimeLeft(t => {
+        if (t <= 1) {
+          clearInterval(timerRef.current);
+          handleAnswer(null); // timeout
+          return 0;
+        }
+        return t - 1;
+      });
+    }, 1000);
+  };
+
+  const handleAnswer = (choice) => {
+    if (answered !== null) return;
+    clearInterval(timerRef.current);
+    const q = questions[qIdx];
+    const correct = choice === q.a;
+    setAnswered(choice);
+    if (correct) setScore(s => s + 1);
+    setHistory(h => [...h, correct ? "✅" : "❌"]);
+    setTimeout(() => {
+      setAnswered(null);
+      if (qIdx + 1 >= TOTAL) { setPhase("end"); }
+      else { setQIdx(i => i + 1); startTimer(); }
+    }, 900);
+  };
+
+  const start = () => { setPhase("play"); startTimer(); };
+  useEffect(() => () => clearInterval(timerRef.current), []);
+
+  const bonus = score * 12;
+  const q = questions[qIdx];
+
+  return (
+    <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#1c0d00,#431407,#1a0a00)", fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column", alignItems:"center", padding:"20px 16px" }}>
+      <div style={{ width:"100%", maxWidth:400 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+          <div style={{ color:"#fff", fontWeight:900, fontSize:22 }}>⚡ Quiz Flash</div>
+          {phase === "play" && <div style={{ color:"#F59E0B", fontWeight:800, fontSize:18 }}>{qIdx+1}/{TOTAL}</div>}
+        </div>
+
+        {phase === "intro" && (
+          <div style={{ textAlign:"center", paddingTop:40 }}>
+            <div style={{ fontSize:80, animation:"bounce2 0.6s ease-in-out infinite" }}>⚡</div>
+            <h2 style={{ color:"#fff", fontSize:22, fontWeight:900, marginTop:16 }}>Quiz Ultra-Rapide !</h2>
+            <p style={{ color:"rgba(255,255,255,0.7)", fontSize:15 }}>{TOTAL} questions · {TIME_PER_Q} secondes chacune · Que des réflexes !</p>
+            <p style={{ color:"#F59E0B", fontWeight:700, fontSize:14, marginTop:8 }}>+12⭐ par bonne réponse</p>
+            <button onClick={start} style={{ marginTop:24, padding:"15px 40px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:16, cursor:"pointer" }}>
+              GO ! ⚡
+            </button>
+          </div>
+        )}
+
+        {phase === "play" && (
+          <>
+            {/* Timer bar urgente */}
+            <div style={{ height:10, background:"rgba(255,255,255,0.1)", borderRadius:99, marginBottom:20, overflow:"hidden" }}>
+              <div style={{ height:"100%", width:`${(timeLeft/TIME_PER_Q)*100}%`, background: timeLeft<=2?"#f87171":"#F59E0B", borderRadius:99, transition:"width 1s linear" }} />
+            </div>
+            {/* Historique */}
+            <div style={{ display:"flex", gap:6, justifyContent:"center", marginBottom:16 }}>
+              {history.map((r,i)=><span key={i} style={{fontSize:20}}>{r}</span>)}
+              {Array.from({length:TOTAL-history.length}).map((_,i)=><span key={i} style={{fontSize:20,opacity:0.25}}>⚪</span>)}
+            </div>
+            {/* Question */}
+            <div style={{ background:"rgba(255,255,255,0.08)", backdropFilter:"blur(12px)", borderRadius:20, padding:"22px 18px", border:"1px solid rgba(245,158,11,0.4)", marginBottom:20, textAlign:"center" }}>
+              <p style={{ color:"#fff", fontSize:20, fontWeight:900, margin:0 }}>{q.q}</p>
+            </div>
+            {/* Choix */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              {q.choices.map((c,i) => {
+                const isCorrect = c === q.a;
+                const isSelected = c === answered;
+                let bg = "rgba(255,255,255,0.08)", border = "rgba(255,255,255,0.2)";
+                if (answered !== null) {
+                  if (isCorrect) { bg="rgba(74,222,128,0.25)"; border="#4ade80"; }
+                  else if (isSelected) { bg="rgba(248,113,113,0.25)"; border="#f87171"; }
+                }
+                return <button key={i} onClick={()=>handleAnswer(c)} disabled={answered!==null}
+                  style={{ padding:"14px 10px", borderRadius:14, border:`2px solid ${border}`, background:bg, color:"#fff", cursor:"pointer", fontWeight:700, fontSize:15, transition:"all 0.15s" }}>
+                  {c}
+                </button>;
+              })}
+            </div>
+          </>
+        )}
+
+        {phase === "end" && (
+          <div style={{ textAlign:"center", paddingTop:30 }}>
+            <div style={{ fontSize:64 }}>{score>=4?"🌟":score>=2?"⚡":"💫"}</div>
+            <h2 style={{ color:"#fff", fontSize:24, fontWeight:900, marginTop:12 }}>
+              {score>=4?"Ultra-rapide !":score>=2?"Pas mal !":"Continue !"}
+            </h2>
+            <div style={{ display:"flex", gap:8, justifyContent:"center", margin:"16px 0" }}>
+              {history.map((r,i)=><span key={i} style={{fontSize:26}}>{r}</span>)}
+            </div>
+            <div style={{ padding:"14px 28px", background:"rgba(255,215,0,0.15)", border:"1px solid rgba(255,215,0,0.4)", borderRadius:18, display:"inline-block", margin:"0 0 24px" }}>
+              <span style={{ color:"#FFD700", fontWeight:900, fontSize:26 }}>+{bonus} ⭐</span>
+              <p style={{ color:"rgba(255,255,255,0.55)", fontSize:12, margin:"4px 0 0" }}>{score}/{TOTAL} bonnes réponses</p>
+            </div>
+            <br/>
+            <button onClick={() => onEnd(bonus)} style={{ padding:"14px 40px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:16, cursor:"pointer" }}>
+              Retour
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── MINI-JEU : ROUE DE LA FORTUNE ───────────────────────────────────────────────
+const WHEEL_SEGMENTS = [
+  { label:"+10 ⭐",  value:10,  color:"#4ade80" },
+  { label:"+25 ⭐",  value:25,  color:"#F59E0B" },
+  { label:"+5 ⭐",   value:5,   color:"#4ECDC4" },
+  { label:"+50 ⭐",  value:50,  color:"#f87171" },
+  { label:"+15 ⭐",  value:15,  color:"#A855F7" },
+  { label:"+30 ⭐",  value:30,  color:"#FF6B9D" },
+  { label:"+8 ⭐",   value:8,   color:"#60a5fa" },
+  { label:"JACKPOT 🌟",value:100,color:"#FFD700" },
+];
+
+function MinigameWheel({ profile, onEnd }) {
+  const [phase, setPhase] = useState("ready"); // ready|spinning|result
+  const [rotation, setRotation] = useState(0);
+  const [winner, setWinner] = useState(null);
+  const [spinsLeft, setSpinsLeft] = useState(2);
+  const [totalBonus, setTotalBonus] = useState(0);
+
+  const spin = () => {
+    if (phase === "spinning" || spinsLeft <= 0) return;
+    const extraSpins = 5 + Math.random() * 5; // 5-10 tours complets
+    const segmentAngle = 360 / WHEEL_SEGMENTS.length;
+    const targetSeg = Math.floor(Math.random() * WHEEL_SEGMENTS.length);
+    const targetAngle = 360 * extraSpins + (360 - targetSeg * segmentAngle - segmentAngle / 2);
+    const newRot = rotation + targetAngle;
+    setRotation(newRot);
+    setPhase("spinning");
+    setTimeout(() => {
+      setWinner(WHEEL_SEGMENTS[targetSeg]);
+      setTotalBonus(b => b + WHEEL_SEGMENTS[targetSeg].value);
+      setSpinsLeft(s => s - 1);
+      setPhase("result");
+    }, 3500);
+  };
+
+  const segAngle = 360 / WHEEL_SEGMENTS.length;
+  const r = 130;
+  const cx = 150, cy = 150;
+
+  return (
+    <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#1a0a3d,#3b1070,#1a0a3d)", fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column", alignItems:"center", padding:"20px 16px" }}>
+      <div style={{ width:"100%", maxWidth:400 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+          <div style={{ color:"#fff", fontWeight:900, fontSize:22 }}>🎡 Roue Bonus</div>
+          <div style={{ color:"#A855F7", fontWeight:800 }}>{spinsLeft} tour{spinsLeft>1?"s":""} restant{spinsLeft>1?"s":""}</div>
+        </div>
+
+        {/* Flèche indicatrice */}
+        <div style={{ textAlign:"center", fontSize:28, marginBottom:-8, position:"relative", zIndex:2 }}>▼</div>
+
+        {/* Roue SVG */}
+        <div style={{ display:"flex", justifyContent:"center", marginBottom:16 }}>
+          <svg width="300" height="300" viewBox="0 0 300 300">
+            <g transform={`rotate(${rotation}, ${cx}, ${cy})`} style={{ transition: phase==="spinning" ? "transform 3.5s cubic-bezier(0.17,0.67,0.21,0.99)" : "none" }}>
+              {WHEEL_SEGMENTS.map((seg, i) => {
+                const startAngle = (i * segAngle - 90) * Math.PI / 180;
+                const endAngle = ((i + 1) * segAngle - 90) * Math.PI / 180;
+                const x1 = cx + r * Math.cos(startAngle);
+                const y1 = cy + r * Math.sin(startAngle);
+                const x2 = cx + r * Math.cos(endAngle);
+                const y2 = cy + r * Math.sin(endAngle);
+                const midAngle = ((i + 0.5) * segAngle - 90) * Math.PI / 180;
+                const tx = cx + (r * 0.65) * Math.cos(midAngle);
+                const ty = cy + (r * 0.65) * Math.sin(midAngle);
+                return (
+                  <g key={i}>
+                    <path d={`M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2} Z`}
+                      fill={seg.color} stroke="rgba(0,0,0,0.3)" strokeWidth="2" />
+                    <text x={tx} y={ty} textAnchor="middle" dominantBaseline="middle"
+                      transform={`rotate(${(i+0.5)*segAngle}, ${tx}, ${ty})`}
+                      fill="#fff" fontSize="11" fontWeight="800" style={{ userSelect:"none" }}>
+                      {seg.label}
+                    </text>
+                  </g>
+                );
+              })}
+              <circle cx={cx} cy={cy} r="22" fill="#1a1a2e" stroke="white" strokeWidth="3"/>
+              <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize="18">🎡</text>
+            </g>
+          </svg>
+        </div>
+
+        {/* Résultat */}
+        {winner && phase === "result" && (
+          <div style={{ textAlign:"center", padding:"14px", background:`${winner.color}22`, border:`2px solid ${winner.color}`, borderRadius:18, marginBottom:16, animation:"popIn 0.4s cubic-bezier(0.34,1.56,0.64,1)" }}>
+            <div style={{ color:winner.color, fontWeight:900, fontSize:24 }}>{winner.label}</div>
+            {winner.value >= 50 && <div style={{ fontSize:28, marginTop:4 }}>🎊🎊🎊</div>}
+          </div>
+        )}
+
+        <div style={{ textAlign:"center" }}>
+          {spinsLeft > 0 ? (
+            <button onClick={spin} disabled={phase==="spinning"}
+              style={{ padding:"15px 48px", borderRadius:16, background:phase==="spinning"?"rgba(255,255,255,0.2)":"linear-gradient(135deg,#A855F7,#7c3aed)", border:"none", color:"#fff", fontWeight:800, fontSize:17, cursor:phase==="spinning"?"not-allowed":"pointer", boxShadow:"0 4px 20px rgba(168,85,247,0.4)" }}>
+              {phase==="spinning" ? "⏳ En rotation..." : "Tourner ! 🎡"}
+            </button>
+          ) : (
+            <div>
+              <div style={{ padding:"14px 28px", background:"rgba(255,215,0,0.15)", border:"1px solid rgba(255,215,0,0.4)", borderRadius:18, display:"inline-block", marginBottom:20 }}>
+                <span style={{ color:"#FFD700", fontWeight:900, fontSize:28 }}>+{totalBonus} ⭐</span>
+                <p style={{ color:"rgba(255,255,255,0.55)", fontSize:12, margin:"4px 0 0" }}>Total gagné !</p>
+              </div>
+              <br/>
+              <button onClick={() => onEnd(totalBonus)} style={{ padding:"14px 40px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:16, cursor:"pointer" }}>
+                Retour
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+      <style>{`@keyframes popIn{from{opacity:0;transform:scale(0.5)}to{opacity:1;transform:scale(1)}}`}</style>
+    </div>
+  );
+}
+
+// ─── PANNEAU MINI-JEUX DISPONIBLES ───────────────────────────────────────────────
+function MinigameUnlockBanner({ profile, onPlay }) {
+  const available = getAvailableMinigames(profile);
+  const next = getNextUnlock(profile);
+  const total = profile.stats.total || 0;
+  if (available.length === 0 && !next) return null;
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {available.length > 0 && (
+        <>
+          <div style={{ fontSize:11, color:"rgba(255,215,0,0.8)", textTransform:"uppercase", letterSpacing:1.5, marginBottom:8 }}>
+            🎮 Mini-jeux disponibles !
+          </div>
+          {available.map(mg => (
+            <button key={mg.id} onClick={() => onPlay(mg.id)}
+              style={{ width:"100%", marginBottom:8, padding:"13px 16px", borderRadius:14, border:`1px solid ${mg.color}66`, background:`${mg.color}18`, color:"#fff", cursor:"pointer", display:"flex", alignItems:"center", gap:12, animation:"pulse 2s ease-in-out infinite" }}>
+              <span style={{ fontSize:30 }}>{mg.emoji}</span>
+              <div style={{ textAlign:"left" }}>
+                <div style={{ fontWeight:800, fontSize:15, color:mg.color }}>{mg.label}</div>
+                <div style={{ fontSize:12, color:"rgba(255,255,255,0.6)" }}>{mg.desc}</div>
+              </div>
+              <span style={{ marginLeft:"auto", background:`${mg.color}33`, border:`1px solid ${mg.color}55`, borderRadius:99, padding:"4px 12px", fontSize:12, fontWeight:700, color:mg.color }}>Jouer →</span>
+            </button>
+          ))}
+          <style>{`@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,215,0,0.3)}50%{box-shadow:0 0 0 6px rgba(255,215,0,0)}}`}</style>
+        </>
+      )}
+      {next && (
+        <div style={{ padding:"10px 14px", borderRadius:12, background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+            <span style={{ color:"rgba(255,255,255,0.5)", fontSize:12 }}>Prochain mini-jeu : {next.label} {next.emoji}</span>
+            <span style={{ color:"rgba(255,255,255,0.5)", fontSize:12 }}>{total}/{next.threshold} questions</span>
+          </div>
+          <div style={{ height:6, background:"rgba(255,255,255,0.1)", borderRadius:99, overflow:"hidden" }}>
+            <div style={{ height:"100%", width:`${Math.min(100,(total/next.threshold)*100)}%`, background:"rgba(255,215,0,0.6)", borderRadius:99, transition:"width 0.5s" }} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOUVELLES FEATURES — injectées après les helpers existants
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── SPEECH SYNTHESIS ────────────────────────────────────────────────────────────
+function speak(text, lang = "fr-FR", rate = 0.9) {
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang; u.rate = rate; u.pitch = 1.1; u.volume = 1;
+    // Choisir voix locale si dispo
+    const voices = window.speechSynthesis.getVoices();
+    const v = voices.find(v => v.lang.startsWith(lang.slice(0,2)) && v.localService);
+    if (v) u.voice = v;
+    window.speechSynthesis.speak(u);
+  } catch {}
+}
+function stopSpeak() { try { window.speechSynthesis.cancel(); } catch {} }
+
+// ─── SPEECH RECOGNITION HOOK ─────────────────────────────────────────────────────
+function useSpeechRec(lang = "fr-FR", onResult) {
+  const recRef = useRef(null);
+  const [listening, setListening] = useState(false);
+  const [supported] = useState(() => !!( window.SpeechRecognition || window.webkitSpeechRecognition));
+
+  const start = useCallback(() => {
+    if (!supported) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.lang = lang; rec.continuous = false; rec.interimResults = false;
+    rec.onresult = (e) => { const t = e.results[0][0].transcript; onResult(t); };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    recRef.current = rec;
+    try { rec.start(); setListening(true); } catch {}
+  }, [lang, onResult, supported]);
+
+  const stop = useCallback(() => { try { recRef.current?.stop(); } catch {} setListening(false); }, []);
+
+  return { listening, supported, start, stop };
+}
+
+// ─── SAISONS ─────────────────────────────────────────────────────────────────────
+function getCurrentSeason() {
+  const m = new Date().getMonth(); // 0-11
+  if (m >= 6 && m <= 8) return { id: "ete", label: "Été", emoji: "☀️", color: "#F59E0B" };
+  if (m >= 9 && m <= 10) return { id: "toussaint", label: "Toussaint", emoji: "🍂", color: "#ea580c" };
+  if (m >= 11 || m <= 0) return { id: "noel", label: "Noël", emoji: "⛄", color: "#60a5fa" };
+  if (m >= 1 && m <= 2) return { id: "hiver", label: "Hiver", emoji: "❄️", color: "#93c5fd" };
+  return { id: "printemps", label: "Printemps", emoji: "🌸", color: "#f9a8d4" };
+}
+function getSeasonKey() { const s = getCurrentSeason(); return `${new Date().getFullYear()}-${s.id}`; }
+
+function checkSeasonReset(profile) {
+  const curKey = getSeasonKey();
+  if (profile.lastSeasonKey === curKey) return profile;
+  // Nouvelle saison : archiver les badges, reset mini-jeux, garder étoiles
+  const archived = [...(profile.seasonArchive || []), {
+    season: profile.lastSeasonKey || "?",
+    stars: profile.totalStars,
+    badges: profile.earnedBadges || [],
+  }];
+  return {
+    ...profile,
+    lastSeasonKey: curKey,
+    playedMinigames: {},       // reset déblocages
+    seasonArchive: archived,
+  };
+}
+
+// ─── MINI-JEU MÉMOIRE ────────────────────────────────────────────────────────────
+const MEMORY_DECKS = [
+  { theme:"Tables de ×", pairs:[
+    {a:"2×6",b:"12"},{a:"3×7",b:"21"},{a:"4×8",b:"32"},{a:"5×9",b:"45"},
+    {a:"6×6",b:"36"},{a:"7×8",b:"56"},
+  ]},
+  { theme:"Capitales", pairs:[
+    {a:"France",b:"Paris"},{a:"Espagne",b:"Madrid"},{a:"Italie",b:"Rome"},{a:"Allemagne",b:"Berlin"},
+    {a:"Angleterre",b:"Londres"},{a:"Portugal",b:"Lisbonne"},
+  ]},
+  { theme:"Animaux 🇬🇧", pairs:[
+    {a:"Cat",b:"Chat"},{a:"Dog",b:"Chien"},{a:"Horse",b:"Cheval"},{a:"Bird",b:"Oiseau"},
+    {a:"Fish",b:"Poisson"},{a:"Rabbit",b:"Lapin"},
+  ]},
+  { theme:"Sciences", pairs:[
+    {a:"H₂O",b:"Eau"},{a:"O₂",b:"Oxygène"},{a:"CO₂",b:"Carbone"},{a:"⭐",b:"Étoile"},
+    {a:"🌱",b:"Plante"},{a:"🦋",b:"Insecte"},
+  ]},
+];
+
+function MinigameMemory({ profile, onEnd }) {
+  const deck = MEMORY_DECKS[Math.floor(Math.random() * MEMORY_DECKS.length)];
+  // Créer 12 cartes (6 paires × 2)
+  const makeCards = () => {
+    const cards = [];
+    deck.pairs.forEach((p, i) => {
+      cards.push({ id: i*2,   pairId: i, text: p.a, side: "a" });
+      cards.push({ id: i*2+1, pairId: i, text: p.b, side: "b" });
+    });
+    return cards.sort(() => Math.random() - 0.5);
+  };
+
+  const [cards] = useState(makeCards);
+  const [flipped, setFlipped] = useState([]);   // indices des cartes retournées (actif)
+  const [matched, setMatched] = useState([]);    // pairIds résolus
+  const [moves, setMoves] = useState(0);
+  const [phase, setPhase] = useState("intro");
+  const [startTime, setStartTime] = useState(null);
+  const lockRef = useRef(false);
+
+  const flip = (idx) => {
+    if (lockRef.current) return;
+    if (flipped.includes(idx)) return;
+    if (matched.includes(cards[idx].pairId)) return;
+
+    const newFlipped = [...flipped, idx];
+    setFlipped(newFlipped);
+
+    if (newFlipped.length === 2) {
+      setMoves(m => m + 1);
+      lockRef.current = true;
+      const [a, b] = newFlipped.map(i => cards[i]);
+      if (a.pairId === b.pairId) {
+        setTimeout(() => {
+          setMatched(m => {
+            const nm = [...m, a.pairId];
+            if (nm.length === deck.pairs.length) setPhase("end");
+            return nm;
+          });
+          setFlipped([]);
+          lockRef.current = false;
+        }, 600);
+      } else {
+        setTimeout(() => { setFlipped([]); lockRef.current = false; }, 900);
+      }
+    }
+  };
+
+  const timeElapsed = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
+  const bonus = phase === "end" ? Math.max(15, 80 - moves * 3) : 0;
+  const cardColors = ["#4ECDC4","#FF6B9D","#A855F7","#F59E0B","#10B981","#60a5fa"];
+
+  return (
+    <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0f172a,#1e3a5f,#0f172a)", fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column", alignItems:"center", padding:"20px 16px" }}>
+      <div style={{ width:"100%", maxWidth:420 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+          <div style={{ color:"#fff", fontWeight:900, fontSize:20 }}>🧠 Mémoire</div>
+          {phase === "play" && <div style={{ color:"rgba(255,255,255,0.6)", fontSize:13 }}>{matched.length}/{deck.pairs.length} paires • {moves} coups</div>}
+        </div>
+
+        {phase === "intro" && (
+          <div style={{ textAlign:"center", paddingTop:30 }}>
+            <div style={{ fontSize:72, animation:"bounce2 0.8s ease-in-out infinite" }}>🧠</div>
+            <h2 style={{ color:"#fff", fontSize:22, fontWeight:900, marginTop:14 }}>Jeu de Mémoire</h2>
+            <div style={{ background:"rgba(255,255,255,0.1)", borderRadius:14, padding:"12px 16px", margin:"16px 0", border:"1px solid rgba(255,255,255,0.15)" }}>
+              <div style={{ color:"rgba(255,255,255,0.5)", fontSize:11, textTransform:"uppercase", letterSpacing:1 }}>Thème</div>
+              <div style={{ color:"#fff", fontWeight:800, fontSize:18, marginTop:4 }}>{deck.theme}</div>
+            </div>
+            <p style={{ color:"rgba(255,255,255,0.6)", fontSize:14 }}>Retourne les cartes par paires. Moins de coups = plus de ⭐ !</p>
+            <p style={{ color:"#4ECDC4", fontWeight:700, fontSize:13 }}>Jusqu'à +80⭐</p>
+            <button onClick={() => { setPhase("play"); setStartTime(Date.now()); }}
+              style={{ marginTop:20, padding:"14px 40px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:16, cursor:"pointer" }}>
+              Jouer ! 🧠
+            </button>
+          </div>
+        )}
+
+        {phase === "play" && (
+          <>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:8 }}>
+              {cards.map((card, idx) => {
+                const isFlipped = flipped.includes(idx) || matched.includes(card.pairId);
+                const isMatched = matched.includes(card.pairId);
+                const color = cardColors[card.pairId % cardColors.length];
+                return (
+                  <div key={card.id} onClick={() => flip(idx)}
+                    style={{ aspectRatio:"1", borderRadius:12, cursor:isMatched?"default":"pointer", perspective:600, position:"relative" }}>
+                    <div style={{ width:"100%", height:"100%", position:"relative", transformStyle:"preserve-3d",
+                      transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
+                      transition:"transform 0.35s ease" }}>
+                      {/* Face cachée */}
+                      <div style={{ position:"absolute", inset:0, borderRadius:12, backfaceVisibility:"hidden",
+                        background:"linear-gradient(135deg,#1e3a5f,#0f172a)", border:"2px solid rgba(255,255,255,0.2)",
+                        display:"flex", alignItems:"center", justifyContent:"center", fontSize:24 }}>
+                        ❓
+                      </div>
+                      {/* Face révélée */}
+                      <div style={{ position:"absolute", inset:0, borderRadius:12, backfaceVisibility:"hidden",
+                        transform:"rotateY(180deg)",
+                        background: isMatched ? `${color}33` : `${color}22`,
+                        border:`2px solid ${isMatched ? color : color+"88"}`,
+                        display:"flex", alignItems:"center", justifyContent:"center",
+                        fontSize:13, fontWeight:800, color:"#fff", textAlign:"center", padding:4,
+                        boxShadow: isMatched ? `0 0 12px ${color}66` : "none" }}>
+                        {card.text}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {phase === "end" && (
+          <div style={{ textAlign:"center", paddingTop:20 }}>
+            <div style={{ fontSize:64 }}>{moves <= 8 ? "🏆" : moves <= 12 ? "🥇" : "🎉"}</div>
+            <h2 style={{ color:"#fff", fontSize:24, fontWeight:900, marginTop:10 }}>
+              {moves <= 8 ? "Mémoire parfaite !" : moves <= 12 ? "Très bien !" : "Toutes les paires !"}
+            </h2>
+            <div style={{ display:"flex", justifyContent:"center", gap:20, margin:"16px 0", color:"rgba(255,255,255,0.6)", fontSize:14 }}>
+              <span>🃏 {moves} coups</span>
+              <span>⏱️ {timeElapsed}s</span>
+            </div>
+            <div style={{ padding:"14px 28px", background:"rgba(255,215,0,0.15)", border:"1px solid rgba(255,215,0,0.4)", borderRadius:18, display:"inline-block", marginBottom:24 }}>
+              <span style={{ color:"#FFD700", fontWeight:900, fontSize:26 }}>+{bonus} ⭐</span>
+              <p style={{ color:"rgba(255,255,255,0.5)", fontSize:12, margin:"4px 0 0" }}>Score basé sur le nombre de coups</p>
+            </div>
+            <br/>
+            <button onClick={() => onEnd(bonus)} style={{ padding:"14px 40px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:15, cursor:"pointer" }}>
+              Retour
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── BOSS FINAL ──────────────────────────────────────────────────────────────────
+const BOSS_QUESTIONS = [
+  { q:"Quel est le résultat de 7 × 8 ?",      a:"56",     choices:["48","54","56","63"], subject:"maths" },
+  { q:"Comment dit-on 'butterfly' en français ?", a:"Papillon", choices:["Abeille","Libellule","Papillon","Moustique"], subject:"anglais" },
+  { q:"Quelle planète est la plus grande du système solaire ?", a:"Jupiter", choices:["Saturne","Jupiter","Uranus","Neptune"], subject:"sciences" },
+  { q:"En quelle année a été prise la Bastille ?", a:"1789", choices:["1776","1789","1793","1815"], subject:"histoire" },
+  { q:"Quel est le pluriel de 'cheval' ?",     a:"Chevaux", choices:["Chevals","Chevaux","Chevales","Chevaus"], subject:"francais" },
+  { q:"Combien font 3/4 + 1/4 ?",             a:"1",       choices:["1/2","3/8","1","4/8"], subject:"maths" },
+  { q:"La photosynthèse utilise quelle énergie ?", a:"Soleil", choices:["Vent","Eau","Soleil","Feu"], subject:"sciences" },
+  { q:"Quelle est la capitale de l'Espagne ?", a:"Madrid",  choices:["Barcelone","Madrid","Séville","Valence"], subject:"histoire" },
+  { q:"How do you say 'maison' in English ?", a:"House",   choices:["Home","House","Flat","Room"], subject:"anglais" },
+  { q:"Quel verbe est au subjonctif : 'que je sois' ?", a:"Être", choices:["Avoir","Être","Aller","Faire"], subject:"francais" },
+];
+
+function MinigameBoss({ profile, onEnd }) {
+  const theme = THEMES[profile.theme];
+  const [phase, setPhase] = useState("intro");
+  const [qIdx, setQIdx] = useState(0);
+  const [lives, setLives] = useState(3);
+  const [bossHp, setBossHp] = useState(100);
+  const [score, setScore] = useState(0);
+  const [selected, setSelected] = useState(null);
+  const [feedback, setFeedback] = useState(null);
+  const [bossState, setBossState] = useState("idle"); // idle|attack|hurt|dead
+  const [bossMsg, setBossMsg] = useState("Tu oses défier le Maître des Savoirs ?!");
+  const BOSS_MSGS_WRONG = ["Ha ha ha ! Tu pensais vraiment réussir ?!", "Encore raté ! La connaissance, ça s'apprend !", "Mon pouvoir grandit ! Continue d'échouer !"];
+  const BOSS_MSGS_HURT  = ["Aïe ! Comment oses-tu ?!", "Impossible ! Tu m'as touché !", "Non non non ! Tu es trop fort !"];
+
+  const q = BOSS_QUESTIONS[qIdx];
+  const dmg = Math.floor(100 / BOSS_QUESTIONS.length);
+  const subColor = SUBJECTS.find(s => s.id === q?.subject)?.color || "#fff";
+
+  const answer = (choice) => {
+    if (selected) return;
+    setSelected(choice);
+    const correct = choice === q.a;
+    setFeedback(correct ? "correct" : "wrong");
+
+    if (correct) {
+      setBossHp(h => Math.max(0, h - dmg));
+      setBossState("hurt");
+      setBossMsg(BOSS_MSGS_HURT[Math.floor(Math.random() * BOSS_MSGS_HURT.length)]);
+      setScore(s => s + 1);
+    } else {
+      setLives(l => l - 1);
+      setBossState("attack");
+      setBossMsg(BOSS_MSGS_WRONG[Math.floor(Math.random() * BOSS_MSGS_WRONG.length)]);
+    }
+
+    setTimeout(() => {
+      setBossState("idle");
+      const newLives = correct ? lives : lives - 1;
+      const newBossHp = correct ? Math.max(0, bossHp - dmg) : bossHp;
+      if (newLives <= 0) { setPhase("lose"); return; }
+      if (qIdx + 1 >= BOSS_QUESTIONS.length || newBossHp <= 0) { setPhase("win"); return; }
+      setSelected(null); setFeedback(null);
+      setQIdx(i => i + 1);
+    }, 1200);
+  };
+
+  const bossAnims = {
+    idle:   "bossIdle 2s ease-in-out infinite",
+    attack: "bossAttack 0.5s ease",
+    hurt:   "bossHurt 0.4s ease",
+    dead:   "none",
+  };
+  const bonus = phase === "win" ? score * 20 + (lives * 30) : score * 5;
+
+  return (
+    <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#1a0000,#5c0000,#1a0000)", fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column", alignItems:"center", padding:"16px" }}>
+      <style>{`
+        @keyframes bossIdle{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-8px) scale(1.02)}}
+        @keyframes bossAttack{0%{transform:scale(1) translateX(0)}30%{transform:scale(1.3) translateX(20px)}100%{transform:scale(1) translateX(0)}}
+        @keyframes bossHurt{0%{transform:scale(1)}20%{transform:scale(0.8) rotate(-5deg)}60%{transform:scale(1.05)}100%{transform:scale(1)}}
+        @keyframes popIn{from{opacity:0;transform:scale(0.5)}to{opacity:1;transform:scale(1)}}
+        @keyframes shake{0%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}100%{transform:translateX(0)}}
+        @keyframes bounce2{0%,100%{transform:translateY(0)}50%{transform:translateY(-14px)}}
+      `}</style>
+      <div style={{ width:"100%", maxWidth:400 }}>
+        {phase === "intro" && (
+          <div style={{ textAlign:"center", paddingTop:20 }}>
+            <div style={{ fontSize:90, animation:"bossIdle 2s ease-in-out infinite", display:"inline-block" }}>🧙‍♂️</div>
+            <h2 style={{ color:"#f87171", fontSize:24, fontWeight:900, marginTop:12 }}>⚔️ Boss Final !</h2>
+            <h3 style={{ color:"#fff", fontSize:18, fontWeight:700, margin:"4px 0 12px" }}>Le Maître des Savoirs</h3>
+            <div style={{ background:"rgba(248,113,113,0.15)", border:"1px solid rgba(248,113,113,0.4)", borderRadius:14, padding:"12px 16px", marginBottom:16 }}>
+              <p style={{ color:"rgba(255,255,255,0.8)", fontSize:14, margin:0, lineHeight:1.6 }}>
+                Tu as travaillé dur cet été. Il est temps d'affronter le Maître des Savoirs !<br/>
+                <strong style={{ color:"#FFD700" }}>3 ❤️ • 10 questions • Toutes matières</strong>
+              </p>
+            </div>
+            <p style={{ color:"#f87171", fontStyle:"italic", fontSize:14 }}>"{bossMsg}"</p>
+            <button onClick={() => setPhase("play")} style={{ marginTop:16, padding:"15px 40px", borderRadius:16, background:"linear-gradient(135deg,#dc2626,#991b1b)", border:"none", color:"#fff", fontWeight:800, fontSize:16, cursor:"pointer", boxShadow:"0 4px 20px rgba(220,38,38,0.5)" }}>
+              Combattre ! ⚔️
+            </button>
+          </div>
+        )}
+
+        {phase === "play" && q && (
+          <>
+            {/* HP bars */}
+            <div style={{ display:"flex", gap:12, marginBottom:16 }}>
+              <div style={{ flex:1 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"rgba(255,255,255,0.5)", marginBottom:4 }}>
+                  <span>🧙‍♂️ Boss</span><span>{bossHp}%</span>
+                </div>
+                <div style={{ height:10, background:"rgba(255,255,255,0.1)", borderRadius:99, overflow:"hidden" }}>
+                  <div style={{ height:"100%", width:`${bossHp}%`, background:"linear-gradient(90deg,#dc2626,#f87171)", borderRadius:99, transition:"width 0.5s ease" }}/>
+                </div>
+              </div>
+              <div style={{ flex:1 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"rgba(255,255,255,0.5)", marginBottom:4 }}>
+                  <span>❤️ Vies</span><span>{lives}/3</span>
+                </div>
+                <div style={{ display:"flex", gap:4 }}>
+                  {[0,1,2].map(i => <span key={i} style={{ fontSize:20, filter:i<lives?"none":"grayscale(1) opacity(0.3)" }}>❤️</span>)}
+                </div>
+              </div>
+            </div>
+
+            {/* Boss */}
+            <div style={{ textAlign:"center", marginBottom:12 }}>
+              <div style={{ fontSize:72, display:"inline-block", animation:bossAnims[bossState],
+                filter:bossState==="hurt"?"drop-shadow(0 0 20px #4ade80)":bossState==="attack"?"drop-shadow(0 0 20px #f87171)":"drop-shadow(0 4px 12px rgba(0,0,0,0.6))" }}>
+                🧙‍♂️
+              </div>
+              <div style={{ background:"rgba(0,0,0,0.5)", backdropFilter:"blur(8px)", borderRadius:12, padding:"8px 14px", display:"inline-block", marginTop:6, maxWidth:"80%" }}>
+                <p style={{ color: bossState==="hurt"?"#4ade80":bossState==="attack"?"#f87171":"rgba(255,255,255,0.8)", fontSize:13, fontWeight:700, margin:0, fontStyle:"italic" }}>
+                  "{bossMsg}"
+                </p>
+              </div>
+            </div>
+
+            {/* Question */}
+            <div style={{ background:"rgba(0,0,0,0.6)", backdropFilter:"blur(12px)", borderRadius:16, padding:"16px 14px", border:`1px solid ${subColor}44`, marginBottom:14 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                <span style={{ fontSize:11, color:"rgba(255,255,255,0.4)", textTransform:"uppercase", letterSpacing:1 }}>Question {qIdx+1}/10</span>
+                <span style={{ fontSize:12, color:subColor, fontWeight:700 }}>{SUBJECTS.find(s=>s.id===q.subject)?.emoji} {SUBJECTS.find(s=>s.id===q.subject)?.label}</span>
+              </div>
+              <p style={{ color:"#fff", fontSize:16, fontWeight:700, margin:0, lineHeight:1.5 }}>{q.q}</p>
+            </div>
+
+            {/* Choix */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+              {q.choices.map((c, i) => {
+                const isCorrect = c === q.a, isSel = c === selected;
+                let bg="rgba(255,255,255,0.07)", border="rgba(255,255,255,0.15)";
+                if (selected) {
+                  if (isCorrect) { bg="rgba(74,222,128,0.2)"; border="#4ade80"; }
+                  else if (isSel) { bg="rgba(248,113,113,0.2)"; border="#f87171"; }
+                }
+                return <button key={i} onClick={() => answer(c)} disabled={!!selected}
+                  style={{ padding:"13px 10px", borderRadius:13, border:`2px solid ${border}`, background:bg, color:"#fff", cursor:"pointer", fontWeight:700, fontSize:14, transition:"all 0.15s",
+                    animation: selected && isCorrect ? "popIn 0.3s ease" : selected && isSel ? "shake 0.3s ease" : "none" }}>
+                  {c}
+                </button>;
+              })}
+            </div>
+          </>
+        )}
+
+        {(phase === "win" || phase === "lose") && (
+          <div style={{ textAlign:"center", paddingTop:20 }}>
+            <div style={{ fontSize:80, animation:"bounce2 1s ease-in-out infinite" }}>{phase==="win"?"🏆":"💀"}</div>
+            <h2 style={{ color:phase==="win"?"#4ade80":"#f87171", fontSize:26, fontWeight:900, marginTop:12 }}>
+              {phase==="win"?"Victoire ! Le Maître est vaincu !":"Défaite... mais tu reviendras !"}
+            </h2>
+            <p style={{ color:"rgba(255,255,255,0.6)", fontSize:14 }}>{score}/10 bonnes réponses • {lives} vie{lives>1?"s":""} restante{lives>1?"s":""}</p>
+            <div style={{ padding:"14px 28px", background:"rgba(255,215,0,0.15)", border:"1px solid rgba(255,215,0,0.4)", borderRadius:18, display:"inline-block", margin:"16px 0" }}>
+              <span style={{ color:"#FFD700", fontWeight:900, fontSize:26 }}>+{bonus} ⭐</span>
+              {phase==="win"&&<p style={{ color:"rgba(255,255,255,0.5)", fontSize:12, margin:"4px 0 0" }}>+{lives*30}⭐ bonus vies sauvées !</p>}
+            </div>
+            <br/>
+            <button onClick={() => onEnd(bonus)} style={{ padding:"14px 40px", borderRadius:16, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:15, cursor:"pointer" }}>
+              Retour au camp !
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── MODE DUO ─────────────────────────────────────────────────────────────────────
+// Génère une question partagée, chaque tablette répond, les résultats s'affichent côte à côte
+async function postDuoQuestion(pseudo, subjectId, level) {
+  const duoId = `duo-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+  await sharedSet(`duo:active`, { duoId, host: pseudo, subjectId, level, ts: Date.now(), answers: {} });
+  return duoId;
+}
+
+function DuoScreen({ profile, onBack, onEarnStars }) {
+  const theme = THEMES[profile.theme];
+  const [phase, setPhase] = useState("lobby"); // lobby|waiting|playing|results
+  const [subjectId, setSubjectId] = useState("maths");
+  const [duoData, setDuoData] = useState(null);
+  const [q, setQ] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [revealed, setRevealed] = useState(false);
+  const [opponentAnswer, setOpponentAnswer] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const pollRef = useRef(null);
+
+  const subject = SUBJECTS.find(s => s.id === subjectId);
+
+  const hostGame = async () => {
+    setLoading(true);
+    try {
+      setPhase("waiting");
+      // Générer la question
+      const qq = await generateQuestion(subjectId, profile.level);
+      const duoId = `duo-${Date.now()}`;
+      const data = { duoId, host: profile.pseudo, subjectId, question: qq, ts: Date.now(), answers: {} };
+      await sharedSet(`duo:session`, data);
+      setDuoData(data); setQ(qq);
+      setPhase("playing");
+      // Poller les réponses de l'adversaire
+      pollRef.current = setInterval(async () => {
+        try {
+          const r = await window.storage.get(`duo:session`, true);
+          if (!r) return;
+          const d = JSON.parse(r.value);
+          const opponent = Object.keys(d.answers || {}).find(k => k !== profile.pseudo);
+          if (opponent) { setOpponentAnswer(d.answers[opponent]); }
+        } catch {}
+      }, 1500);
+    } catch { setPhase("lobby"); }
+    setLoading(false);
+  };
+
+  const joinGame = async () => {
+    setLoading(true);
+    try {
+      const r = await window.storage.get(`duo:session`, true);
+      if (!r) { alert("Aucune partie en cours. Demande à l'autre tablette d'en créer une !"); setLoading(false); return; }
+      const d = JSON.parse(r.value);
+      if (Date.now() - d.ts > 300000) { alert("La session a expiré."); setLoading(false); return; }
+      setDuoData(d); setQ(d.question); setSubjectId(d.subjectId);
+      setPhase("playing");
+      pollRef.current = setInterval(async () => {
+        try {
+          const r2 = await window.storage.get(`duo:session`, true);
+          if (!r2) return;
+          const d2 = JSON.parse(r2.value);
+          const opponent = Object.keys(d2.answers || {}).find(k => k !== profile.pseudo);
+          if (opponent) setOpponentAnswer(d2.answers[opponent]);
+        } catch {}
+      }, 1500);
+    } catch { alert("Erreur de connexion."); }
+    setLoading(false);
+  };
+
+  const answer = async (choice) => {
+    if (selected || !duoData) return;
+    clearInterval(pollRef.current);
+    setSelected(choice);
+    const isCorrect = choice === q.answer;
+    // Sauvegarder ma réponse
+    try {
+      const r = await window.storage.get(`duo:session`, true);
+      if (r) {
+        const d = JSON.parse(r.value);
+        d.answers[profile.pseudo] = { choice, correct: isCorrect, ts: Date.now() };
+        await sharedSet(`duo:session`, d);
+      }
+    } catch {}
+    setRevealed(true);
+    onEarnStars(isCorrect ? 10 : 0, isCorrect, 1, q.topic, 0);
+  };
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
+
+  const choiceColors = ["#4ECDC4","#FF6B9D","#A855F7","#F59E0B"];
+  const opponentCorrect = opponentAnswer?.correct;
+  const myCorrect = selected === q?.answer;
+
+  return (
+    <div style={{ minHeight:"100vh", background:theme.bg, fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column" }}>
+      <div style={{ padding:"14px 16px", display:"flex", alignItems:"center", gap:12, background:"rgba(0,0,0,0.3)", backdropFilter:"blur(10px)", borderBottom:`1px solid ${theme.border}33` }}>
+        <button onClick={() => { clearInterval(pollRef.current); onBack(); }} style={{ background:"none", border:"none", color:"#fff", fontSize:24, cursor:"pointer" }}>←</button>
+        <div style={{ color:"#fff", fontWeight:900, fontSize:18 }}>⚔️ Mode Duo</div>
+        <div style={{ marginLeft:"auto", background:"rgba(255,215,0,0.15)", border:"1px solid rgba(255,215,0,0.3)", borderRadius:20, padding:"5px 12px", color:"#FFD700", fontWeight:800 }}>{profile.pseudo}</div>
+      </div>
+
+      <div style={{ flex:1, padding:"20px 16px" }}>
+        {phase === "lobby" && (
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:64, marginBottom:12 }}>⚔️</div>
+            <h2 style={{ color:"#fff", fontWeight:900, fontSize:22, marginBottom:6 }}>Défi 1v1 !</h2>
+            <p style={{ color:"rgba(255,255,255,0.6)", fontSize:14, marginBottom:24 }}>Même question, deux tablettes. Qui répondra juste en premier ?</p>
+            {/* Choisir matière */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:24 }}>
+              {SUBJECTS.map(s => (
+                <button key={s.id} onClick={() => setSubjectId(s.id)}
+                  style={{ padding:"12px", borderRadius:12, border:`2px solid ${subjectId===s.id?s.color:"rgba(255,255,255,0.15)"}`, background:subjectId===s.id?`${s.color}22`:"rgba(255,255,255,0.07)", color:"#fff", cursor:"pointer", fontWeight:700, fontSize:13 }}>
+                  {s.emoji} {s.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ display:"flex", gap:10 }}>
+              <button onClick={hostGame} disabled={loading}
+                style={{ flex:1, padding:"14px", borderRadius:14, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:15, cursor:"pointer" }}>
+                {loading ? "⏳..." : "Créer la partie 🎮"}
+              </button>
+              <button onClick={joinGame} disabled={loading}
+                style={{ flex:1, padding:"14px", borderRadius:14, background:"rgba(255,255,255,0.1)", border:"1px solid rgba(255,255,255,0.25)", color:"#fff", fontWeight:800, fontSize:15, cursor:"pointer" }}>
+                Rejoindre 🔗
+              </button>
+            </div>
+            <p style={{ color:"rgba(255,255,255,0.35)", fontSize:12, marginTop:12 }}>+10⭐ si bonne réponse</p>
+          </div>
+        )}
+
+        {phase === "waiting" && (
+          <div style={{ textAlign:"center", paddingTop:60 }}>
+            <div style={{ fontSize:48, animation:"spin 1s linear infinite", display:"inline-block" }}>⏳</div>
+            <p style={{ color:"#fff", fontWeight:700, fontSize:18, marginTop:16 }}>Génération de la question...</p>
+          </div>
+        )}
+
+        {phase === "playing" && q && (
+          <>
+            <div style={{ display:"flex", gap:8, marginBottom:16, justifyContent:"center" }}>
+              <div style={{ padding:"6px 14px", borderRadius:20, background:`${theme.accent}22`, border:`1px solid ${theme.accent}44`, color:theme.accent, fontSize:12, fontWeight:700 }}>
+                🎮 {profile.pseudo}
+              </div>
+              {opponentAnswer && (
+                <div style={{ padding:"6px 14px", borderRadius:20, background:"rgba(255,255,255,0.1)", border:"1px solid rgba(255,255,255,0.2)", color:"rgba(255,255,255,0.7)", fontSize:12, fontWeight:700 }}>
+                  ✓ Adversaire a répondu !
+                </div>
+              )}
+            </div>
+
+            <div style={{ background:"rgba(0,0,0,0.45)", backdropFilter:"blur(12px)", borderRadius:18, padding:"18px 16px", border:`1px solid ${subject?.color}44`, marginBottom:16 }}>
+              <p style={{ color:"#fff", fontSize:17, fontWeight:700, margin:0, lineHeight:1.5 }}>{q.question}</p>
+            </div>
+
+            <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
+              {(q.choices || []).map((c, i) => {
+                const letter = ["A","B","C","D"][i];
+                const isC = letter === q.answer, isSel = selected === letter;
+                let bg="rgba(255,255,255,0.07)", border="rgba(255,255,255,0.15)";
+                if (revealed) {
+                  if (isC) { bg="rgba(74,222,128,0.22)"; border="#4ade80"; }
+                  else if (isSel) { bg="rgba(248,113,113,0.22)"; border="#f87171"; }
+                }
+                return <button key={i} onClick={() => answer(letter)} disabled={!!selected}
+                  style={{ padding:"13px 14px", borderRadius:13, border:`2px solid ${border}`, background:bg, color:"#fff", cursor:selected?"default":"pointer", display:"flex", alignItems:"center", gap:10, fontSize:14, fontWeight:600, transition:"all 0.15s" }}>
+                  <span style={{ width:28, height:28, borderRadius:"50%", background:`${choiceColors[i]}44`, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:800, fontSize:12, color:choiceColors[i], flexShrink:0 }}>{letter}</span>
+                  <span style={{ flex:1 }}>{c.replace(/^[ABCD]\)\s*/,"")}</span>
+                </button>;
+              })}
+            </div>
+
+            {revealed && (
+              <div style={{ marginTop:14, padding:"14px", borderRadius:16, background:"rgba(0,0,0,0.5)", border:"1px solid rgba(255,255,255,0.15)", animation:"popIn 0.4s ease" }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                  <div style={{ textAlign:"center", padding:"10px", borderRadius:12, background:myCorrect?"rgba(74,222,128,0.2)":"rgba(248,113,113,0.2)", border:`1px solid ${myCorrect?"#4ade80":"#f87171"}` }}>
+                    <div style={{ fontSize:22 }}>{myCorrect?"🎉":"😅"}</div>
+                    <div style={{ color:"#fff", fontWeight:800, fontSize:12, marginTop:4 }}>{profile.pseudo}</div>
+                    <div style={{ color:myCorrect?"#4ade80":"#f87171", fontSize:11 }}>{myCorrect?"Correct !":"Raté !"}</div>
+                  </div>
+                  <div style={{ textAlign:"center", padding:"10px", borderRadius:12, background:opponentAnswer?(opponentCorrect?"rgba(74,222,128,0.2)":"rgba(248,113,113,0.2)"):"rgba(255,255,255,0.08)", border:`1px solid ${opponentAnswer?(opponentCorrect?"#4ade80":"#f87171"):"rgba(255,255,255,0.2)"}` }}>
+                    <div style={{ fontSize:22 }}>{opponentAnswer?(opponentCorrect?"🎉":"😅"):"⏳"}</div>
+                    <div style={{ color:"#fff", fontWeight:800, fontSize:12, marginTop:4 }}>Adversaire</div>
+                    <div style={{ color:"rgba(255,255,255,0.5)", fontSize:11 }}>{opponentAnswer?(opponentCorrect?"Correct !":"Raté !"):"En attente..."}</div>
+                  </div>
+                </div>
+                {q.explanation && <p style={{ color:"rgba(255,255,255,0.6)", fontSize:12, margin:"10px 0 12px", lineHeight:1.5 }}>💡 {q.explanation}</p>}
+                <button onClick={onBack} style={{ width:"100%", padding:12, borderRadius:12, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:14, cursor:"pointer" }}>
+                  Retour à l'accueil
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}@keyframes popIn{from{opacity:0;transform:scale(0.8)}to{opacity:1;transform:scale(1)}}`}</style>
+    </div>
+  );
+}
+
+// ─── BOUTON VOCAL dans QuizScreen ─────────────────────────────────────────────────
+// Composant injecté dans le quiz existant
+function VoiceButtons({ text, lang, onSpeech, subjectId, question, speechSupported }) {
+  const [micState, setMicState] = useState("idle"); // idle|listening|done
+  const recRef = useRef(null);
+
+  const startListen = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    rec.lang = lang; rec.continuous = false; rec.interimResults = false;
+    rec.onresult = (e) => { onSpeech(e.results[0][0].transcript); setMicState("done"); };
+    rec.onend = () => setMicState("idle");
+    rec.onerror = () => setMicState("idle");
+    recRef.current = rec;
+    try { rec.start(); setMicState("listening"); } catch { setMicState("idle"); }
+  };
+
+  const stopListen = () => { try { recRef.current?.stop(); } catch {} setMicState("idle"); };
+
+  return (
+    <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+      {/* TTS */}
+      <button onClick={() => speak(text, lang)}
+        style={{ padding:"8px 14px", borderRadius:10, background:"rgba(255,255,255,0.1)", border:"1px solid rgba(255,255,255,0.2)", color:"#fff", cursor:"pointer", fontSize:14, display:"flex", alignItems:"center", gap:6, fontWeight:600 }}>
+        🔊 <span style={{ fontSize:12 }}>Écouter</span>
+      </button>
+      {/* STT — uniquement pour questions ouvertes FR/EN */}
+      {(subjectId === "francais" || subjectId === "anglais") && speechSupported && (
+        <button onClick={micState === "listening" ? stopListen : startListen}
+          style={{ padding:"8px 14px", borderRadius:10, background:micState==="listening"?"rgba(248,113,113,0.3)":"rgba(255,255,255,0.1)", border:`1px solid ${micState==="listening"?"#f87171":"rgba(255,255,255,0.2)"}`, color:micState==="listening"?"#f87171":"#fff", cursor:"pointer", fontSize:14, display:"flex", alignItems:"center", gap:6, fontWeight:600, animation:micState==="listening"?"micPulse 0.8s ease-in-out infinite":"none" }}>
+          🎤 <span style={{ fontSize:12 }}>{micState==="listening"?"Stop":"Répondre"}</span>
+        </button>
+      )}
+      <style>{`@keyframes micPulse{0%,100%{box-shadow:0 0 0 0 rgba(248,113,113,0.5)}50%{box-shadow:0 0 0 8px rgba(248,113,113,0)}}`}</style>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOUVELLES FEATURES V6
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── TABLEAU DES SAISONS ──────────────────────────────────────────────────────
+const SEASON_META = {
+  ete:        { emoji:"☀️",  label:"Été",        color:"#F59E0B", bg:"linear-gradient(135deg,#78350f,#d97706,#78350f)" },
+  toussaint:  { emoji:"🍂",  label:"Toussaint",  color:"#ea580c", bg:"linear-gradient(135deg,#431407,#c2410c,#431407)" },
+  noel:       { emoji:"⛄",  label:"Noël",       color:"#60a5fa", bg:"linear-gradient(135deg,#1e3a5f,#3b82f6,#1e3a5f)" },
+  hiver:      { emoji:"❄️",  label:"Hiver",      color:"#93c5fd", bg:"linear-gradient(135deg,#0c4a6e,#7dd3fc,#0c4a6e)" },
+  printemps:  { emoji:"🌸",  label:"Printemps",  color:"#f9a8d4", bg:"linear-gradient(135deg,#831843,#ec4899,#831843)" },
+};
+
+function parseSeasonKey(key) {
+  if (!key) return { year:"?", id:"ete" };
+  const parts = key.split("-");
+  return { year: parts[0], id: parts[1] || "ete" };
+}
+
+function SeasonBadge({ stars, correct, total }) {
+  const pct = total > 0 ? Math.round((correct / total) * 100) : 0;
+  if (stars >= 500) return { emoji:"🏆", label:"Champion", color:"#FFD700" };
+  if (stars >= 200) return { emoji:"⭐", label:"Expert",   color:"#f59e0b" };
+  if (stars >= 100) return { emoji:"🥇", label:"Avancé",   color:"#4ade80" };
+  if (stars >=  50) return { emoji:"📚", label:"Studieux", color:"#60a5fa" };
+  return { emoji:"🌱", label:"Débutant", color:"#94a3b8" };
+}
+
+function SeasonsScreen({ profile, onBack }) {
+  const theme = THEMES[profile.theme];
+  const archive = profile.seasonArchive || [];
+  const cur = getCurrentSeason();
+  const curKey = getSeasonKey();
+
+  // Saison actuelle (stats en cours)
+  const currentEntry = {
+    season: curKey,
+    stars: profile.totalStars || 0,
+    correct: profile.stats?.correct || 0,
+    total: profile.stats?.total || 0,
+    sessions: profile.stats?.sessions || 0,
+    badges: profile.earnedBadges || [],
+    isCurrent: true,
+  };
+
+  const allSeasons = [currentEntry, ...archive.slice().reverse()];
+
+  return (
+    <div style={{ minHeight:"100vh", background:theme.bg, fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column" }}>
+      {/* Header */}
+      <div style={{ padding:"14px 18px", display:"flex", alignItems:"center", gap:12, background:"rgba(0,0,0,0.3)", backdropFilter:"blur(10px)", borderBottom:`1px solid ${theme.border}33` }}>
+        <button onClick={onBack} style={{ background:"none", border:"none", color:"#fff", fontSize:24, cursor:"pointer" }}>←</button>
+        <div>
+          <div style={{ color:"rgba(255,255,255,0.5)", fontSize:11, textTransform:"uppercase", letterSpacing:1 }}>Historique</div>
+          <div style={{ color:"#fff", fontWeight:900, fontSize:18 }}>📅 Mes Saisons</div>
+        </div>
+      </div>
+
+      <div style={{ flex:1, padding:"16px 14px", overflowY:"auto" }}>
+        {allSeasons.length === 0 ? (
+          <div style={{ textAlign:"center", paddingTop:60 }}>
+            <div style={{ fontSize:48 }}>📅</div>
+            <p style={{ color:"rgba(255,255,255,0.5)", marginTop:12 }}>Aucune saison archivée.<br/>Continue à réviser !</p>
+          </div>
+        ) : allSeasons.map((entry, i) => {
+          const { year, id } = parseSeasonKey(entry.season);
+          const meta = SEASON_META[id] || SEASON_META.ete;
+          const badge = SeasonBadge({ stars: entry.stars, correct: entry.correct || 0, total: entry.total || 0 });
+          const pct = (entry.total || 0) > 0 ? Math.round(((entry.correct||0) / entry.total) * 100) : 0;
+
+          return (
+            <div key={i} style={{ marginBottom:12, borderRadius:20, overflow:"hidden", border:`1px solid ${meta.color}44`, boxShadow:`0 4px 20px ${meta.color}22` }}>
+              {/* Header carte */}
+              <div style={{ background:meta.bg, padding:"16px 18px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                <div>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <span style={{ fontSize:28 }}>{meta.emoji}</span>
+                    <div>
+                      <div style={{ color:"#fff", fontWeight:900, fontSize:17 }}>
+                        {meta.label} {year}
+                        {entry.isCurrent && <span style={{ marginLeft:8, fontSize:10, background:"rgba(255,255,255,0.2)", borderRadius:99, padding:"2px 8px", fontWeight:700, textTransform:"uppercase", letterSpacing:1 }}>En cours</span>}
+                      </div>
+                      <div style={{ color:"rgba(255,255,255,0.65)", fontSize:12, marginTop:2 }}>{badge.emoji} {badge.label}</div>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ color:"#FFD700", fontWeight:900, fontSize:24 }}>{entry.stars}</div>
+                  <div style={{ color:"rgba(255,255,255,0.5)", fontSize:11 }}>⭐ gagnées</div>
+                </div>
+              </div>
+
+              {/* Stats */}
+              <div style={{ background:"rgba(0,0,0,0.45)", backdropFilter:"blur(10px)", padding:"14px 18px" }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:12 }}>
+                  {[
+                    { label:"Sessions", value: entry.sessions || "?", emoji:"📝" },
+                    { label:"Réussite", value: `${pct}%`, emoji:"🎯" },
+                    { label:"Questions", value: entry.total || 0, emoji:"❓" },
+                  ].map(s => (
+                    <div key={s.label} style={{ textAlign:"center", padding:"8px 4px", background:"rgba(255,255,255,0.07)", borderRadius:10, border:"1px solid rgba(255,255,255,0.08)" }}>
+                      <div style={{ fontSize:18 }}>{s.emoji}</div>
+                      <div style={{ color:"#fff", fontWeight:800, fontSize:14, marginTop:2 }}>{s.value}</div>
+                      <div style={{ color:"rgba(255,255,255,0.4)", fontSize:10 }}>{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Badges gagnés */}
+                {(entry.badges?.length > 0) && (
+                  <div>
+                    <div style={{ color:"rgba(255,255,255,0.4)", fontSize:11, textTransform:"uppercase", letterSpacing:1, marginBottom:6 }}>Badges obtenus</div>
+                    <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                      {entry.badges.map((b, bi) => (
+                        <div key={bi} style={{ display:"flex", alignItems:"center", gap:4, padding:"4px 10px", background:`${meta.color}22`, border:`1px solid ${meta.color}44`, borderRadius:99 }}>
+                          <span style={{ fontSize:14 }}>{b.emoji}</span>
+                          <span style={{ color:"#fff", fontSize:11, fontWeight:700 }}>{b.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Info reset */}
+        <div style={{ padding:"12px 14px", borderRadius:12, background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.08)", marginTop:8 }}>
+          <p style={{ color:"rgba(255,255,255,0.35)", fontSize:12, margin:0, lineHeight:1.6 }}>
+            ℹ️ Les mini-jeux se rechargent à chaque nouvelle saison. Les étoiles et badges sont archivés ici pour toujours.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── MODE HISTOIRE ────────────────────────────────────────────────────────────
+// Arc narratif sur l'été : 5 chapitres, chacun débloqué par un palier de questions
+const STORY_CHAPTERS = [
+  {
+    id: 1, threshold: 0, title: "L'Appel de l'Aventure",
+    emoji: "🗺️", color: "#4ECDC4",
+    bg: "linear-gradient(135deg,#0f172a,#1e3a5f,#0f172a)",
+    intro: "Un parchemin mystérieux est apparu sur ton bureau ce matin...",
+    text: `🗺️ L'histoire commence ici.\n\nTu es un jeune aventurier qui a reçu une lettre mystérieuse. Un vieux sage nommé *Mentor* t'a choisi pour une mission extraordinaire : traverser les Terres du Savoir et récupérer les cinq Cristaux de Connaissance.\n\n"Chaque cristal renferme le pouvoir d'une matière", écrit-il. "Maths, Français, Anglais, Histoire, Sciences... sans eux, le Royaume Scolaire plongera dans l'oubli."\n\nTon aventure commence. Le premier cristal t'attend dans la Forêt des Chiffres...`,
+    reward: "💎 Cristal de Départ", rewardStars: 20,
+  },
+  {
+    id: 2, threshold: 15, title: "La Forêt des Chiffres",
+    emoji: "🌲", color: "#10B981",
+    bg: "linear-gradient(135deg,#022c22,#064e3b,#022c22)",
+    intro: "15 questions résolues ! Tu avances dans la Forêt des Chiffres...",
+    text: `🌲 La Forêt des Chiffres.\n\nTu pénètres dans une forêt étrange où les arbres sont faits de nombres. Des équations flottent dans l'air comme des feuilles. Un *Gardien des Maths* barre ton chemin.\n\n"Pour passer", grogne-t-il, "tu dois prouver ta valeur ! Mais... tu as déjà résolu ${15} défis. Impresionnant."\n\nIl s'écarte et te remet le **Cristal des Maths**. Il scintille de la couleur des chiffres.\n\nMais au loin, tu aperçois une tour de bibliothèque... Le Château des Mots t'attend.`,
+    reward: "🔢 Cristal des Maths", rewardStars: 40,
+  },
+  {
+    id: 3, threshold: 30, title: "Le Château des Mots",
+    emoji: "🏰", color: "#FF6B9D",
+    bg: "linear-gradient(135deg,#450a0a,#7f1d1d,#450a0a)",
+    intro: "30 questions ! Tu arrives au Château des Mots...",
+    text: `🏰 Le Château des Mots.\n\nUne bibliothèque immense s'élève devant toi, ses tours atteignant les nuages. *Félix le Renard*, gardien des textes, t'accueille avec un sourire.\n\n"Ah, un aventurier du Savoir ! J'ai entendu parler de toi. Tu as conquis la Forêt des Chiffres... mais le langage, c'est une autre aventure !"\n\nIl te tend le **Cristal du Français**, brillant comme une encre d'or. "Trois cristaux restent. Les terres étrangères t'attendent, courageux explorateur."\n\nUn bateau t'attend au port. Destination : l'Île des Langues.`,
+    reward: "📖 Cristal du Français", rewardStars: 60,
+  },
+  {
+    id: 4, threshold: 50, title: "L'Île des Langues",
+    emoji: "🌊", color: "#A855F7",
+    bg: "linear-gradient(135deg,#1a0a3d,#3b1070,#1a0a3d)",
+    intro: "50 questions ! L'île mystérieuse émerge des brumes...",
+    text: `🌊 L'Île des Langues.\n\nTon bateau accoste sur une île où les habitants parlent toutes les langues du monde à la fois. *Pip l'Oiseau coloré* t'attend sur le quai.\n\n"Welcome, adventurer! Bienvenue, aventurier! Du hast es geschafft!"\n\nIl rit et te parle de l'histoire de l'île : jadis, tous les peuples s'y retrouvaient pour commercer et partager leurs savoirs. Le **Cristal de l'Anglais** était leur symbole de paix.\n\n"It's yours now. Tu l'as mérité."\n\nIl ne reste plus que les Terres Anciennes. Le temps et l'espace t'appellent...`,
+    reward: "🌍 Cristal de l'Anglais", rewardStars: 80,
+  },
+  {
+    id: 5, threshold: 75, title: "Les Terres Anciennes",
+    emoji: "🏛️", color: "#F59E0B",
+    bg: "linear-gradient(135deg,#292524,#57534e,#292524)",
+    intro: "75 questions ! Tu foules les Terres Anciennes...",
+    text: `🏛️ Les Terres Anciennes & le Laboratoire Éternel.\n\nTu traverses les ruines de civilisations oubliées. *Merlin le Sage* t'attend près d'une fontaine qui coule à l'envers.\n\n"Tu es arrivé jusqu'ici... Peu d'aventuriers en sont capables."\n\nIl t'offre le **Cristal de l'Histoire** et te guide jusqu'au laboratoire secret de *Sparky*, où expériences et découvertes illuminent les nuits.\n\n"Le dernier cristal — celui des Sciences — est à toi aussi", murmure Sparky. "Car qui comprend le monde peut le changer."\n\nTu tiens maintenant les CINQ Cristaux. Il est temps de rentrer... et d'affronter le Maître des Savoirs pour sauver le Royaume Scolaire. ⚔️`,
+    reward: "🔬 Cristal des Sciences + 🗺️ Cristal de l'Histoire", rewardStars: 120,
+  },
+];
+
+function StoryScreen({ profile, onBack, onEarnStars }) {
+  const theme = THEMES[profile.theme];
+  const total = profile.stats?.total || 0;
+  const unlockedChapters = STORY_CHAPTERS.filter(c => total >= c.threshold);
+  const nextChapter = STORY_CHAPTERS.find(c => total < c.threshold);
+  const [selected, setSelected] = useState(null);
+  const [claimed, setClaimed] = useState(profile.storyClaimed || []);
+
+  const unlockAndRead = (chapter) => {
+    setSelected(chapter);
+    // Donner la récompense si jamais réclamée
+    if (!claimed.includes(chapter.id)) {
+      onEarnStars(chapter.rewardStars, true, 0, "histoire-arc", 0);
+      setClaimed(c => [...c, chapter.id]);
+    }
+  };
+
+  const chapterBg = selected?.bg || theme.bg;
+
+  if (selected) return (
+    <div style={{ minHeight:"100vh", background:selected.bg, fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column" }}>
+      <div style={{ padding:"14px 18px", display:"flex", alignItems:"center", gap:12, background:"rgba(0,0,0,0.4)", backdropFilter:"blur(10px)" }}>
+        <button onClick={() => setSelected(null)} style={{ background:"none", border:"none", color:"#fff", fontSize:24, cursor:"pointer" }}>←</button>
+        <div style={{ color:"#fff", fontWeight:900, fontSize:16 }}>{selected.emoji} Chapitre {selected.id}</div>
+        <div style={{ marginLeft:"auto", color:selected.color, fontWeight:800 }}>{selected.title}</div>
+      </div>
+      <div style={{ flex:1, padding:"20px 18px", overflowY:"auto" }}>
+        {/* Titre chapitre */}
+        <div style={{ textAlign:"center", marginBottom:24 }}>
+          <div style={{ fontSize:56 }}>{selected.emoji}</div>
+          <h2 style={{ color:"#fff", fontSize:22, fontWeight:900, margin:"10px 0 4px" }}>{selected.title}</h2>
+          <div style={{ color:selected.color, fontSize:13, fontWeight:700 }}>Chapitre {selected.id} / {STORY_CHAPTERS.length}</div>
+        </div>
+        {/* Texte narratif */}
+        <div style={{ background:"rgba(0,0,0,0.5)", backdropFilter:"blur(12px)", borderRadius:20, padding:"20px 18px", border:`1px solid ${selected.color}33`, marginBottom:16 }}>
+          {selected.text.split("\n\n").map((para, i) => (
+            <p key={i} style={{ color: i===0 ? selected.color : "rgba(255,255,255,0.85)", fontSize:15, lineHeight:1.75, margin:"0 0 14px", fontWeight: i===0 ? 700 : 400,
+              ...(para.includes("**") ? {} : {}) }}>
+              {para.replace(/\*\*(.*?)\*\*/g, "$1").replace(/\*(.*?)\*/g, "$1")}
+            </p>
+          ))}
+        </div>
+        {/* Récompense */}
+        <div style={{ background:`${selected.color}22`, border:`1px solid ${selected.color}55`, borderRadius:16, padding:"14px 16px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+          <div>
+            <div style={{ color:"rgba(255,255,255,0.5)", fontSize:11, textTransform:"uppercase", letterSpacing:1 }}>Récompense</div>
+            <div style={{ color:"#fff", fontWeight:700, fontSize:14, marginTop:2 }}>{selected.reward}</div>
+          </div>
+          <div style={{ color:"#FFD700", fontWeight:900, fontSize:20 }}>
+            {claimed.includes(selected.id) ? "✓ Réclamé" : `+${selected.rewardStars}⭐`}
+          </div>
+        </div>
+        <button onClick={() => setSelected(null)} style={{ width:"100%", marginTop:16, padding:"14px", borderRadius:14, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:15, cursor:"pointer" }}>
+          Continuer l'aventure →
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight:"100vh", background:theme.bg, fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column" }}>
+      <div style={{ padding:"14px 18px", display:"flex", alignItems:"center", gap:12, background:"rgba(0,0,0,0.3)", backdropFilter:"blur(10px)", borderBottom:`1px solid ${theme.border}33` }}>
+        <button onClick={onBack} style={{ background:"none", border:"none", color:"#fff", fontSize:24, cursor:"pointer" }}>←</button>
+        <div>
+          <div style={{ color:"rgba(255,255,255,0.5)", fontSize:11, textTransform:"uppercase", letterSpacing:1 }}>Aventure</div>
+          <div style={{ color:"#fff", fontWeight:900, fontSize:18 }}>📖 L'Épopée du Savoir</div>
+        </div>
+        <div style={{ marginLeft:"auto", color:"rgba(255,255,255,0.5)", fontSize:13 }}>{unlockedChapters.length}/{STORY_CHAPTERS.length} chapitres</div>
+      </div>
+
+      <div style={{ flex:1, padding:"16px 14px", overflowY:"auto" }}>
+        {/* Progress global */}
+        <div style={{ background:"rgba(255,255,255,0.07)", borderRadius:14, padding:"14px 16px", marginBottom:16, border:"1px solid rgba(255,255,255,0.1)" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:8 }}>
+            <span style={{ color:"rgba(255,255,255,0.7)", fontSize:13, fontWeight:600 }}>Progression de l'aventure</span>
+            <span style={{ color:"rgba(255,255,255,0.5)", fontSize:12 }}>{total} questions résolues</span>
+          </div>
+          <div style={{ height:8, background:"rgba(255,255,255,0.1)", borderRadius:99, overflow:"hidden" }}>
+            <div style={{ height:"100%", width:`${Math.min(100,(unlockedChapters.length/STORY_CHAPTERS.length)*100)}%`,
+              background:"linear-gradient(90deg,#4ECDC4,#FFD700)", borderRadius:99, transition:"width 0.5s" }}/>
+          </div>
+        </div>
+
+        {/* Liste chapitres */}
+        {STORY_CHAPTERS.map((chapter, i) => {
+          const unlocked = total >= chapter.threshold;
+          const isClaimed = claimed.includes(chapter.id);
+          const isNext = !unlocked && (i === 0 || total >= STORY_CHAPTERS[i-1].threshold);
+          return (
+            <div key={chapter.id} style={{ marginBottom:10, borderRadius:18, overflow:"hidden",
+              opacity: unlocked ? 1 : 0.55,
+              border:`1px solid ${unlocked ? chapter.color+"55" : "rgba(255,255,255,0.1)"}`,
+              boxShadow: unlocked ? `0 4px 16px ${chapter.color}22` : "none" }}>
+              <div onClick={() => unlocked && unlockAndRead(chapter)}
+                style={{ background: unlocked ? `${chapter.color}18` : "rgba(255,255,255,0.05)",
+                  padding:"14px 16px", cursor: unlocked ? "pointer" : "default",
+                  display:"flex", alignItems:"center", gap:12 }}>
+                {/* Icône chapitre */}
+                <div style={{ width:48, height:48, borderRadius:14, background: unlocked ? `${chapter.color}33` : "rgba(255,255,255,0.1)",
+                  border:`2px solid ${unlocked ? chapter.color : "rgba(255,255,255,0.15)"}`,
+                  display:"flex", alignItems:"center", justifyContent:"center", fontSize:24, flexShrink:0 }}>
+                  {unlocked ? chapter.emoji : "🔒"}
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <span style={{ color:"rgba(255,255,255,0.4)", fontSize:11 }}>Chapitre {chapter.id}</span>
+                    {isClaimed && <span style={{ fontSize:11, color:"#4ade80", fontWeight:700 }}>✓ Lu</span>}
+                    {!unlocked && isNext && <span style={{ fontSize:10, background:"rgba(255,215,0,0.2)", color:"#FFD700", borderRadius:99, padding:"2px 7px", fontWeight:700 }}>Prochain !</span>}
+                  </div>
+                  <div style={{ color:"#fff", fontWeight:800, fontSize:14, marginTop:1 }}>{chapter.title}</div>
+                  {unlocked ? (
+                    <div style={{ color:chapter.color, fontSize:11, marginTop:2 }}>{chapter.reward}</div>
+                  ) : (
+                    <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, marginTop:2 }}>
+                      🔒 Déblocage à {chapter.threshold} questions ({Math.max(0, chapter.threshold - total)} restantes)
+                    </div>
+                  )}
+                </div>
+                {unlocked && <span style={{ color:chapter.color, fontSize:20 }}>{isClaimed ? "📖" : "✨"}</span>}
+              </div>
+              {/* Barre de progression vers ce chapitre */}
+              {!unlocked && isNext && (
+                <div style={{ padding:"8px 16px 12px", background:"rgba(0,0,0,0.3)" }}>
+                  <div style={{ height:5, background:"rgba(255,255,255,0.08)", borderRadius:99, overflow:"hidden" }}>
+                    <div style={{ height:"100%", width:`${Math.min(100,(total/chapter.threshold)*100)}%`,
+                      background:`${chapter.color}88`, borderRadius:99, transition:"width 0.5s" }}/>
+                  </div>
+                  <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, marginTop:4, textAlign:"right" }}>
+                    {total}/{chapter.threshold} questions
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── RAPPEL QUOTIDIEN ─────────────────────────────────────────────────────────
+// Pas de push natif dans artifact — on affiche un badge et une popup à l'ouverture
+function DailyReminderBanner({ profile, onDismiss, onSettings }) {
+  const last = profile.lastVisit || 0;
+  const today = new Date().toDateString();
+  const lastDate = new Date(last).toDateString();
+  const missedDays = last === 0 ? 0 : Math.floor((Date.now() - last) / 86400000);
+
+  if (missedDays < 1) return null; // déjà visité aujourd'hui
+  return (
+    <div style={{ margin:"0 0 12px", padding:"12px 16px", borderRadius:14,
+      background: missedDays >= 3 ? "rgba(220,38,38,0.18)" : "rgba(251,146,60,0.18)",
+      border:`1px solid ${missedDays >= 3 ? "rgba(220,38,38,0.5)" : "rgba(251,146,60,0.5)"}`,
+      animation:"fadeUp 0.4s ease" }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <span style={{ fontSize:24 }}>{missedDays >= 3 ? "😴" : "⏰"}</span>
+          <div>
+            <div style={{ color:"#fff", fontWeight:800, fontSize:14 }}>
+              {missedDays >= 3 ? `${missedDays} jours sans révisions !` : "Bienvenue ! Tu étais absent hier 👋"}
+            </div>
+            <div style={{ color:"rgba(255,255,255,0.6)", fontSize:12 }}>
+              {missedDays >= 3 ? "Ton stade/ta ville t'attend..." : "Quelques questions pour se remettre en route ?"}
+            </div>
+          </div>
+        </div>
+        <button onClick={onDismiss} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", fontSize:20, cursor:"pointer" }}>×</button>
+      </div>
+    </div>
+  );
+}
+
+function ReminderSettingsScreen({ profile, onBack, onSave }) {
+  const [hour, setHour] = useState(profile.reminderHour ?? 10);
+  const [enabled, setEnabled] = useState(profile.reminderEnabled ?? false);
+
+  return (
+    <div style={{ minHeight:"100vh", background:THEMES[profile.theme].bg, fontFamily:"'Nunito','Segoe UI',sans-serif", display:"flex", flexDirection:"column" }}>
+      <div style={{ padding:"14px 18px", display:"flex", alignItems:"center", gap:12, background:"rgba(0,0,0,0.3)", backdropFilter:"blur(10px)", borderBottom:`1px solid ${THEMES[profile.theme].border}33` }}>
+        <button onClick={onBack} style={{ background:"none", border:"none", color:"#fff", fontSize:24, cursor:"pointer" }}>←</button>
+        <div style={{ color:"#fff", fontWeight:900, fontSize:18 }}>⏰ Rappels quotidiens</div>
+      </div>
+      <div style={{ flex:1, padding:"24px 18px" }}>
+        <div style={{ background:"rgba(255,255,255,0.07)", borderRadius:20, padding:"20px", border:"1px solid rgba(255,255,255,0.12)", marginBottom:16 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+            <div>
+              <div style={{ color:"#fff", fontWeight:800, fontSize:16 }}>Rappel d'entraînement</div>
+              <div style={{ color:"rgba(255,255,255,0.5)", fontSize:13, marginTop:2 }}>Affiche un badge au prochain lancement</div>
+            </div>
+            <button onClick={() => setEnabled(e => !e)}
+              style={{ width:52, height:28, borderRadius:99, background:enabled?"#4ade80":"rgba(255,255,255,0.2)", border:"none", cursor:"pointer", position:"relative", transition:"background 0.3s" }}>
+              <div style={{ width:22, height:22, borderRadius:"50%", background:"#fff", position:"absolute", top:3, left: enabled ? 27 : 3, transition:"left 0.3s", boxShadow:"0 2px 4px rgba(0,0,0,0.3)" }}/>
+            </button>
+          </div>
+          {enabled && (
+            <div>
+              <div style={{ color:"rgba(255,255,255,0.6)", fontSize:13, marginBottom:10 }}>Heure cible :</div>
+              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                <input type="range" min={6} max={21} value={hour} onChange={e => setHour(+e.target.value)}
+                  style={{ flex:1, accentColor:"#FFD700" }}/>
+                <div style={{ color:"#FFD700", fontWeight:900, fontSize:22, minWidth:60, textAlign:"center" }}>{hour}h00</div>
+              </div>
+              <div style={{ marginTop:12, padding:"10px 14px", background:"rgba(255,215,0,0.1)", borderRadius:10, border:"1px solid rgba(255,215,0,0.3)" }}>
+                <p style={{ color:"rgba(255,255,255,0.6)", fontSize:12, margin:0 }}>
+                  ℹ️ Sans accès aux notifications système, le rappel s'affiche comme badge rouge quand tu ouvres l'app après {hour}h si tu n'as pas encore révisé aujourd'hui.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+        <button onClick={() => onSave({ reminderEnabled: enabled, reminderHour: hour })}
+          style={{ width:"100%", padding:"14px", borderRadius:14, background:"linear-gradient(135deg,#FFD700,#FF8C00)", border:"none", color:"#1a1a1a", fontWeight:800, fontSize:15, cursor:"pointer" }}>
+          Enregistrer ✓
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── APP v6 ───────────────────────────────────────────────────────────────────
+function App(){
+  const [screen, setScreen]   = useState("loading");
+  const [profile, setProfile] = useState(null);
+  const [quizSubject, setQuizSubject] = useState(null);
+  const [forceTopic, setForceTopic]   = useState(null);
+  const [examMode, setExamMode]       = useState(false);
+  const [sessionResult, setSessionResult] = useState(null);
+  const [sessionStars, setSessionStars]   = useState(0);
+  const [activeMG, setActiveMG] = useState(null);
+  const [reminderDismissed, setReminderDismissed] = useState(false);
+
+  useEffect(() => {
+    let p = loadProfile();
+    if (p) {
+      p = checkSeasonReset(p);
+      // Marquer la visite
+      p = { ...p, lastVisit: Date.now() };
+      saveProfile(p);
+      // Propagate storyClaimed
+      if (!p.storyClaimed) p = { ...p, storyClaimed: [] };
+    }
+    setProfile(p);
+    setScreen(p ? "home" : "setup");
+  }, []);
+
+  const update = (fn) => { setProfile(prev => { const next = fn(prev); saveProfile(next); return next; }); };
+
+  const handleSetup = (p) => {
+    const base = { ...checkSeasonReset(p), lastVisit: Date.now(), storyClaimed: [] };
+    saveProfile(base); setProfile(base); setScreen("home");
+  };
+  const handleSubject = (sid, topic=null, exam=false) => {
+    setQuizSubject(sid); setForceTopic(topic); setExamMode(exam); setSessionStars(0); setScreen("quiz");
+  };
+  const handleRetry = (topic) => handleSubject("maths", topic, false);
+  const handleExam  = () => handleSubject("mix", null, true);
+  const handlePlayMG = (mgId) => {
+    update(prev => { const pm={...(prev.playedMinigames||{})}; pm[mgId]=prev.stats.total; return{...prev,playedMinigames:pm}; });
+    setActiveMG(mgId);
+  };
+  const handleMGEnd = (bonus) => {
+    if (bonus > 0) {
+      const weekId = getWeekId();
+      update(prev => { const ws={...(prev.weeklyStars||{})}; ws[weekId]=(ws[weekId]||0)+bonus; return{...prev,stars:prev.stars+bonus,totalStars:prev.totalStars+bonus,weeklyStars:ws}; });
+    }
+    setActiveMG(null); setScreen("home");
+  };
+  const handleEarnStars = useCallback((stars, isCorrect, total, topic, ns) => {
+    setSessionStars(s => s + stars);
+    const weekId = getWeekId();
+    update(prev => {
+      const ws={...(prev.weeklyStars||{})}; ws[weekId]=(ws[weekId]||0)+stars;
+      const wt={...(prev.weakTopics||{})};
+      if(topic){const t=wt[topic]||{correct:0,total:0};wt[topic]={correct:t.correct+(isCorrect?1:0),total:t.total+total};}
+      const eb=[...(prev.earnedBadges||[])];
+      const badge=STREAK_BADGES.find(b=>b.streak===ns);
+      if(badge&&!eb.find(b=>b.streak===badge.streak))eb.push(badge);
+      return{...prev,stars:prev.stars+stars,totalStars:prev.totalStars+stars,weeklyStars:ws,weakTopics:wt,
+        streak:ns,maxStreak:Math.max(prev.maxStreak||0,ns),earnedBadges:eb,
+        stats:{...prev.stats,correct:prev.stats.correct+(isCorrect?1:0),total:prev.stats.total+total}};
+    });
+  }, []);
+  const handleQuizBack = (score, total) => {
+    setSessionResult({score,total});
+    update(prev=>({...prev,stats:{...prev.stats,sessions:prev.stats.sessions+1}}));
+    setScreen("result");
+  };
+  const handleBuy   = (item) => update(prev=>({...prev,stars:prev.stars-item.cost,owned:[...prev.owned,item.id]}));
+  const handleReset = () => { localStorage.removeItem("vacances_v5"); localStorage.removeItem("vacances_v6"); setProfile(null); setScreen("setup"); };
+  const handleSaveReminder = (settings) => { update(prev=>({...prev,...settings})); setScreen("home"); };
+
+  // Mini-jeux
+  if(activeMG==="penalty"  &&profile) return <MinigamePenalty  profile={profile} onEnd={handleMGEnd}/>;
+  if(activeMG==="wordsnap" &&profile) return <MinigameWordSnap  profile={profile} onEnd={handleMGEnd}/>;
+  if(activeMG==="flashquiz"&&profile) return <MinigameFlashQuiz profile={profile} onEnd={handleMGEnd}/>;
+  if(activeMG==="wheel"    &&profile) return <MinigameWheel     profile={profile} onEnd={handleMGEnd}/>;
+  if(activeMG==="memory"   &&profile) return <MinigameMemory    profile={profile} onEnd={handleMGEnd}/>;
+  if(activeMG==="boss"     &&profile) return <MinigameBoss      profile={profile} onEnd={handleMGEnd}/>;
+
+  if(screen==="loading") return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#1a1a2e",fontFamily:"'Nunito',sans-serif"}}>
+      <div style={{textAlign:"center"}}><div style={{fontSize:52}}>🌴</div><p style={{color:"rgba(255,255,255,0.4)",marginTop:12}}>Chargement...</p></div>
+    </div>
+  );
+
+  if(screen==="setup") return <SetupScreen onComplete={handleSetup}/>;
+
+  if(screen==="home"&&profile){
+    // Injecter le banner rappel dans HomeScreen via prop
+    return <HomeScreen profile={profile} onSubject={handleSubject} onRetry={handleRetry}
+      onShop={()=>setScreen("shop")} onLeaderboard={()=>setScreen("leaderboard")}
+      onExam={handleExam} onReset={handleReset} onPlayMG={handlePlayMG}
+      onDuo={()=>setScreen("duo")} onBoss={()=>handlePlayMG("boss")}
+      onSeasons={()=>setScreen("seasons")} onStory={()=>setScreen("story")}
+      onReminderSettings={()=>setScreen("reminder")}
+      reminderDismissed={reminderDismissed} onDismissReminder={()=>setReminderDismissed(true)}/>;
+  }
+
+  if(screen==="quiz"&&profile) return(
+    <QuizScreen profile={profile} subjectId={quizSubject} forceTopic={forceTopic}
+      examMode={examMode} onBack={handleQuizBack} onEarnStars={handleEarnStars} voiceEnabled={true}/>
+  );
+  if(screen==="result"&&sessionResult&&profile) return(
+    <ResultScreen score={sessionResult.score} total={sessionResult.total}
+      starsEarned={sessionStars} theme={profile.theme} weekend={isWeekend()}
+      examMode={examMode} onHome={()=>setScreen("home")}/>
+  );
+  if(screen==="shop"        &&profile) return <ShopScreen        profile={profile} onBack={()=>setScreen("home")} onBuy={handleBuy}/>;
+  if(screen==="leaderboard" &&profile) return <LeaderboardScreen profile={profile} onBack={()=>setScreen("home")}/>;
+  if(screen==="duo"         &&profile) return <DuoScreen         profile={profile} onBack={()=>setScreen("home")} onEarnStars={handleEarnStars}/>;
+  if(screen==="seasons"     &&profile) return <SeasonsScreen     profile={profile} onBack={()=>setScreen("home")}/>;
+  if(screen==="story"       &&profile) return <StoryScreen       profile={profile} onBack={()=>setScreen("home")} onEarnStars={handleEarnStars}/>;
+  if(screen==="reminder"    &&profile) return <ReminderSettingsScreen profile={profile} onBack={()=>setScreen("home")} onSave={handleSaveReminder}/>;
+
+  return null;
+}
+
+</script>
+
+</body>
+</html>
